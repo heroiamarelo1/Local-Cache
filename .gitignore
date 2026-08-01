@@ -1,0 +1,18 @@
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/*.iml
+android/.idea/
+*.iml
+.DS_Store
+
+# Built APKs live in GitHub Releases, not in git history
+*.apk
+
+# Secrets / local config
+.env
+local-cache-config.json
+*.keystore
+*.jks

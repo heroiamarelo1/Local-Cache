@@ -1,0 +1,54 @@
+Local Cache — configuration
+===========================
+
+USB must be formatted as exFAT (not FAT32). FAT32 cannot store files over 4 GB.
+Format on a computer — the TV app cannot format the drive safely.
+
+Edit local-cache-config.json in Notepad on a computer
+(put it on the USB root when possible),
+or open http://TV_LAN_IP:7100/settings from a phone on the same Wi‑Fi
+(recommended — use the + buttons to add multiple manifests),
+or use "Edit config on TV" in the app.
+
+torrentioManifestUrls  (array)
+  Or legacy singular: torrentioManifestUrl
+  One FINAL manifest.json URL per debrid. Torrentio only supports one debrid
+  service per configure link — for AllDebrid + TorBox, add two URLs.
+  From https://torrentio.strem.fun/configure
+  Example: ["https://torrentio.strem.fun/.../manifest.json", "..."]
+  Do NOT paste the /configure page URL itself.
+
+cometManifestUrls  (array)
+  Or legacy singular: cometManifestUrl
+  Optional. ElfHosted / public Comet — one or more FINAL manifest.json URLs
+  from https://comet.elfhosted.com/configure
+
+localCometManifestUrls  (array)
+  Or legacy singular: localCometManifestUrl
+  Optional. Self-hosted Comet on your LAN (PC/NAS), same Wi‑Fi as the TV.
+  Example: ["http://192.168.1.50:8000/.../manifest.json"]
+  Configure debrid keys on that Comet instance, then paste its final manifest URL.
+  Leave empty if unused. Independent of cometManifestUrls.
+
+debridServices
+  Used Debrid services (Remove the ones that you do not use):
+  ["AllDebrid", "TorBox", "RealDebrid", "Premiumize", "DebridLink", "EasyDebrid", "Offcloud", "Putio"]
+  Only listed services are detected when ranking streams.
+
+streamQuality
+  "1080p"     — Recommended. Smaller files, safer on most USB sticks.
+  "4k_sound"  — 4K with high quality / lossless sound. Needs fast USB and fast internet (~90 Mbps).
+
+cacheMaxGb
+  Maximum space for cached movies on the USB drive (default 100).
+
+resultMode
+  "fast"     — default. Answer sooner, fewer streams.
+  "complete" — wait for all upstreams, more streams.
+
+After editing the JSON on the USB stick, open Local Cache and tap
+Choose USB drive again so the app reloads the file.
+
+Install the add-on in Stremio on this TV:
+  Stremio → Add-ons → Add Add-on → http://127.0.0.1:7100/manifest.json
+(Start the server in Local Cache first.)

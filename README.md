@@ -1,9 +1,9 @@
 # Local Cache 🍿💾
 
-**Watch now. Save it to the USB. Watch again without buffering.**
+**Watch now. Save it to the USB. Watch without buffering.**
 
 Local Cache is a tiny Android TV app that runs a Stremio add-on *on your TV*.  
-You pick a stream like usual (Torrentio / Comet). **You can start watching while it downloads** — no waiting for the whole file. While you chill, it copies the movie to a USB stick. Next time? It plays straight from the stick.
+You pick a stream like usual (Torrentio / Comet). **You can start watching while it downloads** — no waiting for the whole file. While you chill, it copies the movie to a USB stick and plays from it.
 
 ### ✨ The big win
 

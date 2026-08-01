@@ -19,7 +19,7 @@ object StreamDiagnostics {
             allStreams = all,
             quality = cfg.streamQuality,
             enabledDebrid = cfg.debridServices,
-            maxStreams = cfg.maxStreamsForClient(),
+            completeResults = cfg.isCompleteResults(),
         )
 
         return JSONObject()

@@ -13,8 +13,8 @@ android {
         applicationId = "app.localcache.release"
         minSdk = 24
         targetSdk = 34
-        versionCode = 55
-        versionName = "0.4.15"
+        versionCode = 56
+        versionName = "0.4.16"
     }
 
     buildTypes {

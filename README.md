@@ -1,5 +1,7 @@
 # Local Cache 🍿💾
 
+![Local Cache banner](docs/local-cache-banner.png)
+
 **Watch now. Save it to the USB. Watch without buffering.**
 
 Local Cache is a tiny Android TV app that runs a Stremio add-on *on your TV*.  

@@ -181,7 +181,7 @@ class UpstreamFetcher(private val context: Context) {
         return try {
             val request = Request.Builder()
                 .url(url)
-                .header("User-Agent", "LocalCache/0.4.14")
+                .header("User-Agent", "LocalCache/0.4.15")
                 .build()
             val call = client.newCall(request)
             calls[upstream.name] = call

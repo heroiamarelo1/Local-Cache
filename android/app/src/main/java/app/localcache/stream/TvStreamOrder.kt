@@ -9,15 +9,15 @@ object TvStreamOrder {
      * Curated order:
      * #1 best quality (cached if possible), #2 safe 1080p,
      * #3 best cached any debrid, #4 best cached on a *different* debrid,
-     * #5 one download fallback, then more cached options only.
-     *
-     * Quality modes still apply to the TV pool (1080p hides 4K; 4k_sound prefers it).
+     * #5–#6 best 720p (cached first, smaller first) — slow-link safety valve,
+     * then 3 more cached, then 5 uncached (for users without debrid).
      */
     fun buildOrdered(
         allStreams: List<StreamItem>,
         onDrive: List<StreamPick> = emptyList(),
         quality: String = AddonConfig.QUALITY_1080P,
         enabledDebrid: List<String> = AddonConfig.ALL_DEBRID_SERVICES,
+        @Suppress("UNUSED_PARAMETER")
         maxStreams: Int = 25,
     ): StreamBuildResult {
         val rawCount = allStreams.size
@@ -54,7 +54,7 @@ object TvStreamOrder {
         val cached = tvRanked.filter { DebridRules.isDebridCached(it, enabledDebrid) }
         val usingUncachedFallback = cached.isEmpty() && tvRanked.isNotEmpty()
 
-        // #1 — best quality within budget, cached if at all possible (old behaviour).
+        // #1 — best quality within budget, cached if at all possible.
         add(
             cached.firstOrNull() ?: tvRanked.firstOrNull(),
             when {
@@ -89,7 +89,7 @@ object TvStreamOrder {
         add(bestCachedAny, "best")
         val slot3Service = bestCachedAny?.let { DebridRules.matchedService(it, enabledDebrid) }
 
-        // #4 — best cached on a *different* debrid than #3 (e.g. AD then TB).
+        // #4 — best cached on a *different* debrid than #3.
         add(
             pcCached.firstOrNull { stream ->
                 if (seen.contains(stream.cacheKey)) return@firstOrNull false
@@ -99,19 +99,35 @@ object TvStreamOrder {
             "best_other",
         )
 
-        // #5 — one download fallback (may be uncached).
-        add(pcRanked.firstOrNull { !seen.contains(it.cacheKey) }, "download")
+        // #5 / #6 — 720p safety valve (cached first, then smaller files).
+        val p720 = playable
+            .filter { DebridRules.is720Only(it) && !seen.contains(it.cacheKey) }
+            .sortedWith(
+                compareByDescending<StreamItem> { if (DebridRules.isDebridCached(it, enabledDebrid)) 1 else 0 }
+                    .thenBy { DebridRules.parseSizeGb(it) ?: 999.0 }
+                    .thenByDescending { it.qualityScore },
+            )
+        add(p720.getOrNull(0), "720a")
+        add(p720.firstOrNull { !seen.contains(it.cacheKey) }, "720b")
 
-        // Extra rows: more *cached* quality picks only — do not flood with uncached junk.
-        val limit = maxStreams.coerceAtLeast(5)
-        for (stream in tvRanked) {
-            if (picks.size >= limit) break
+        // Next 3 — more cached options.
+        var cachedExtra = 0
+        for (stream in tvRanked.asSequence() + pcCached.asSequence()) {
+            if (cachedExtra >= 3) break
+            if (seen.contains(stream.cacheKey)) continue
             if (!DebridRules.isDebridCached(stream, enabledDebrid)) continue
-            if (!seen.contains(stream.cacheKey)) add(stream, null)
+            add(stream, "cached_extra")
+            cachedExtra++
         }
-        for (stream in pcCached) {
-            if (picks.size >= limit) break
-            if (!seen.contains(stream.cacheKey)) add(stream, null)
+
+        // Next 5 — uncached (people without debrid / download later).
+        var uncachedExtra = 0
+        for (stream in pcRanked) {
+            if (uncachedExtra >= 5) break
+            if (seen.contains(stream.cacheKey)) continue
+            if (DebridRules.isDebridCached(stream, enabledDebrid)) continue
+            add(stream, "uncached")
+            uncachedExtra++
         }
 
         return StreamBuildResult(picks, rawCount, strict.size, usedFallback)

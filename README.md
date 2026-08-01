@@ -12,7 +12,7 @@ You pick a stream like usual (Torrentio / Comet). **You can start watching while
 **No more buffering mid-movie.**  
 Once it’s on the USB, your TV isn’t fighting your internet anymore. Smooth local playback. That’s the whole point.
 
-**Latest APK:** [v0.4.14](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.4.14)
+**Latest APK:** [v0.4.15](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.4.15)
 
 ---
 

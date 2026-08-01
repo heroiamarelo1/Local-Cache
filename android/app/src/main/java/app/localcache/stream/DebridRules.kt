@@ -246,6 +246,15 @@ object DebridRules {
         return Regex("""\b(1080p?|1080i|fullhd|1080)\b""").containsMatchIn(t)
     }
 
+    fun is720ish(stream: StreamItem): Boolean {
+        val t = text(stream).lowercase()
+        return Regex("""\b(720p?|720)\b""").containsMatchIn(t)
+    }
+
+    /** True 720p row — not a 1080p/4K release that also mentions 720. */
+    fun is720Only(stream: StreamItem): Boolean =
+        is720ish(stream) && !is1080ish(stream) && !is4K(stream) && !is8K(stream)
+
     fun passesTvFilters(stream: StreamItem, quality: String): Boolean {
         if (isExcluded(stream)) return false
         if (is8K(stream)) return false

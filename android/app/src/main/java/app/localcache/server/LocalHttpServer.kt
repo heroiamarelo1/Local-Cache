@@ -139,7 +139,7 @@ class LocalHttpServer(
                     """
                     {
                       "id": "org.localcache.release",
-                      "version": "0.4.14",
+                      "version": "0.4.15",
                       "name": "Local Cache",
                       "description": "Local Stremio cache · $qualityNote · install http://127.0.0.1:$listeningPort/manifest.json",
                       "resources": [

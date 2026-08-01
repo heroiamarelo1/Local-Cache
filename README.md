@@ -52,15 +52,13 @@ If the file is already on USB, your TV doesn’t care what the cloud is doing to
 
 ---
 
-## Setup in 4 steps 🚀
+## How it works? 🚀
 
-1. Install the APK from [Releases](https://github.com/heroiamarelo1/Local-Cache/releases)
-2. Open **Local Cache** → pick your USB → start the server
-3. On your phone (same Wi‑Fi), open the settings link from the app and paste your **final** `manifest.json` URLs
-4. In Stremio: **Add-ons → Add Add-on** →  
-   `http://127.0.0.1:7100/manifest.json`
-
-That’s it. Hit play, watch while it fills the stick, and enjoy buffer-free replays later. 🎬
+1. 📦 **Sideload the app** on your Android TV / Google TV ([Releases](https://github.com/heroiamarelo1/Local-Cache/releases))
+2. ▶️ **Start the server** in Local Cache (and pick your USB)
+3. 📱 **Configure on your phone** — same Wi‑Fi, open `TV_IP:7100/settings` (it’s written in the app), paste Torrentio / Comet manifests
+4. 🎬 **Add the add-on in Stremio** → `http://127.0.0.1:7100/manifest.json`
+5. 🍿 **Pick a stream** — watch while it saves to USB
 
 ---
 

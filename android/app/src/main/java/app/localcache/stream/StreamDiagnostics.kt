@@ -32,7 +32,7 @@ object StreamDiagnostics {
             .put("upstreamsConfigured", cfg.hasAnyUpstream())
             .put("streamQuality", cfg.streamQuality)
             .put("resultMode", cfg.resultMode)
-            .put("note", "Install in Stremio with 127.0.0.1. Use LAN IP only for /settings and /health from your phone.")
+            .put("note", "Configure /settings first, then install in Stremio with 127.0.0.1. Use LAN IP for /settings and /health from your phone.")
             .put("testMovie", TEST_MOVIE)
             .put("rawUpstreamCount", all.size)
             .put("strictFilterCount", strict.size)

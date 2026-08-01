@@ -167,9 +167,9 @@ object SettingsPage {
     <button type="submit">Save</button>
   </form>
   <p class="hint" style="margin-top:24px">
-    Install in Stremio on the TV: Add-ons → Add Add-on →
+    After you Save here: on the TV open Stremio → Add-ons → Add Add-on →
     <code>http://127.0.0.1:$port/manifest.json</code>
-    (start the server in the Local Cache app first).
+    (Local Cache server must be running).
   </p>
   <script>
     function addUrl(listId, name, placeholder) {

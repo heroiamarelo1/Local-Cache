@@ -221,14 +221,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         urlText.text = buildString {
-            appendLine("Install in Stremio (on this TV):")
+            appendLine("1) Configure first (phone/PC on same Wi‑Fi):")
+            appendLine(Prefs.settingsUrl(this@MainActivity))
+            appendLine("Paste your Torrentio / Comet manifest.json URLs, then Save.")
+            appendLine()
+            appendLine("2) Then install in Stremio (on this TV):")
             appendLine("Stremio → Add-ons → Add Add-on →")
             appendLine(Prefs.stremioInstallUrl(this@MainActivity))
             appendLine()
-            appendLine("Configure Add-on (phone/PC on same Wi‑Fi):")
-            appendLine(Prefs.settingsUrl(this@MainActivity))
-            appendLine()
-            appendLine("Test Add-on:")
+            appendLine("Test / health:")
             appendLine(Prefs.healthUrl(this@MainActivity))
             if (serverRunning) {
                 appendLine()

@@ -42,7 +42,7 @@ object ServerManager {
                 Prefs.setServerPort(context, port)
 
                 val note = if (port != PortFinder.candidates.first()) {
-                    "Using port $port (7100 not available on this TV)"
+                    "Using port $port (${app.localcache.AppVariant.defaultPort} not available on this TV)"
                 } else {
                     null
                 }

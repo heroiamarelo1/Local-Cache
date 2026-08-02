@@ -497,7 +497,7 @@ object DownloadEngine {
 
     /** Short line for the ongoing notification and the app screen. */
     fun statusLine(): String {
-        val parts = statusParts() ?: return "Idle — ready for Stremio"
+        val parts = statusParts() ?: return app.localcache.AppVariant.idleReadyLine()
         return "${parts.title} · ${parts.stats}"
     }
 
@@ -517,7 +517,7 @@ object DownloadEngine {
         val shortName = if (name.length > 72) name.take(69) + "…" else name
         val progress = CacheRegistry.progress(key)
         val state = when (entry.status) {
-            "paused" -> "paused — tap stream in Stremio to resume"
+            "paused" -> app.localcache.AppVariant.resumeHint()
             "complete" -> "ready on storage"
             "downloading" -> "downloading"
             else -> entry.status

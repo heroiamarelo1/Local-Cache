@@ -14,6 +14,7 @@ import app.localcache.config.AddonConfig
 import app.localcache.model.UsbVolume
 import app.localcache.net.LanAddress
 import app.localcache.net.LanReachability
+import app.localcache.net.PublicIpDetector
 import app.localcache.server.PortFinder
 import app.localcache.server.RequestLog
 import app.localcache.server.ServerManager
@@ -21,6 +22,7 @@ import app.localcache.storage.DiskQuota
 import app.localcache.storage.DownloadEngine
 import app.localcache.storage.StorageMode
 import app.localcache.storage.UsbDriveDetector
+import app.localcache.update.UpdateChecker
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
@@ -30,9 +32,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var updateText: TextView
     private lateinit var statusText: TextView
     private lateinit var urlText: TextView
     private lateinit var ipText: TextView
@@ -41,8 +45,10 @@ class MainActivity : AppCompatActivity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var verifyJob: Job? = null
     private var statusJob: Job? = null
+    private var updateJob: Job? = null
     private var serverRunning = false
     private var lastVerifyMessage: String? = null
+    private var updateStatus: UpdateChecker.Status? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,6 +56,7 @@ class MainActivity : AppCompatActivity() {
 
         serverRunning = ServerManager.isRunning()
 
+        updateText = findViewById(R.id.updateText)
         statusText = findViewById(R.id.statusText)
         urlText = findViewById(R.id.urlText)
         ipText = findViewById(R.id.ipText)
@@ -57,6 +64,14 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnRefreshIp).setOnClickListener {
             refreshLanIp(showDialogIfMultiple = true)
+        }
+
+        val btnPublicIp = findViewById<Button>(R.id.btnPublicIp)
+        if (BuildConfig.WUPLAY_MODE) {
+            btnPublicIp.visibility = android.view.View.VISIBLE
+            btnPublicIp.setOnClickListener { promptPublicIp() }
+        } else {
+            btnPublicIp.visibility = android.view.View.GONE
         }
 
         findViewById<Button>(R.id.btnHealthCheck).setOnClickListener {
@@ -95,6 +110,10 @@ class MainActivity : AppCompatActivity() {
 
         refreshLanIp(showDialogIfMultiple = Prefs.manualLanHost(this) == null)
         refreshUi()
+        checkForUpdate()
+        if (BuildConfig.WUPLAY_MODE && Prefs.publicHost(this) == null) {
+            detectPublicIpQuiet()
+        }
 
         if (Prefs.cacheDirPath(this) == null) {
             promptUsbSelection(force = false)
@@ -111,6 +130,7 @@ class MainActivity : AppCompatActivity() {
                 delay(3_000)
             }
         }
+        if (updateStatus == null) checkForUpdate()
     }
 
     override fun onPause() {
@@ -122,8 +142,20 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         verifyJob?.cancel()
         statusJob?.cancel()
+        updateJob?.cancel()
         scope.cancel()
         super.onDestroy()
+    }
+
+    private fun checkForUpdate() {
+        updateJob?.cancel()
+        updateJob = scope.launch {
+            val status = withContext(Dispatchers.IO) {
+                UpdateChecker.check(force = false)
+            }
+            updateStatus = status
+            refreshUi()
+        }
     }
 
     private fun startLocalServer() {
@@ -140,7 +172,7 @@ class MainActivity : AppCompatActivity() {
             statusText.text = buildString {
                 append("Server running on port ${started.port}")
                 started.portNote?.let { append("\n$it") }
-                append("\nOpen Stremio and add the install URL below.")
+                append("\nOpen ${AppVariant.clientName} and add the install URL below.")
             }
             refreshUi()
             // Quiet LAN ping after bind (no dialog) — full report is Health check.
@@ -214,9 +246,25 @@ class MainActivity : AppCompatActivity() {
         val used = Prefs.lanHost(this)
         val port = Prefs.serverPort(this)
         val cfg = AddonConfig.load(this)
+        val update = updateStatus ?: UpdateChecker.peek()
+
+        if (update?.updateAvailable == true) {
+            updateText.visibility = android.view.View.VISIBLE
+            updateText.text = buildString {
+                append(update.bannerLine())
+                append("\nOpen on phone: ")
+                append(Prefs.settingsUrl(this@MainActivity))
+                append("\nor download: ")
+                append(update.apkUrl ?: update.releaseUrl ?: UpdateChecker.REPO_RELEASES_URL)
+            }
+        } else {
+            updateText.visibility = android.view.View.GONE
+            updateText.text = ""
+        }
 
         statusText.text = when {
-            !serverRunning -> "Stopped — open this app and tap Start server before using Stremio"
+            !serverRunning ->
+                "Stopped — open this app and tap Start server before using ${AppVariant.clientName}"
             !cfg.hasAnyUpstream() -> "Server running — configure Torrentio/Comet manifests next"
             else -> "Server running on port $port"
         }
@@ -226,12 +274,25 @@ class MainActivity : AppCompatActivity() {
             appendLine(Prefs.settingsUrl(this@MainActivity))
             appendLine("Paste your Torrentio / Comet manifest.json URLs, then Save.")
             appendLine()
-            appendLine("2) Then install in Stremio (on this TV):")
-            appendLine("Stremio → Add-ons → Add Add-on →")
-            appendLine(Prefs.stremioInstallUrl(this@MainActivity))
+            if (BuildConfig.WUPLAY_MODE) {
+                appendLine("2) Install in WuPlay (config.wuplay.app needs the internet URL):")
+                appendLine(Prefs.wuplayInstallUrl(this@MainActivity))
+                if (Prefs.publicHost(this@MainActivity) == null) {
+                    appendLine("(tap Set public IP — Preview cannot reach 192.168.x.x)")
+                } else {
+                    appendLine("Router: forward TCP $port → this TV (${Prefs.lanHost(this@MainActivity)})")
+                }
+            } else {
+                appendLine("2) Then install in Stremio (on this TV):")
+                appendLine("Stremio → Add-ons → Add Add-on →")
+                appendLine(Prefs.stremioInstallUrl(this@MainActivity))
+            }
             appendLine()
             appendLine("Test / health:")
             appendLine(Prefs.healthUrl(this@MainActivity))
+            Prefs.publicHealthUrl(this@MainActivity)?.let {
+                appendLine("Public health: $it")
+            }
             if (serverRunning) {
                 appendLine()
                 append(RequestLog.summary())
@@ -239,13 +300,21 @@ class MainActivity : AppCompatActivity() {
         }
 
         ipText.text = buildString {
-            appendLine("LAN IP for phone/PC (same Wi‑Fi, no router changes):")
+            appendLine("LAN IP for phone/PC (same Wi‑Fi):")
             appendLine("Using: $used:$port")
             Prefs.manualLanHost(this@MainActivity)?.let {
                 appendLine("Source: manual choice")
             } ?: Prefs.detectedLanHost(this@MainActivity)?.let {
                 appendLine("Source: auto-detected${Prefs.detectedInterface(this@MainActivity)?.let { " ($it)" } ?: ""}")
             } ?: appendLine("Source: could not detect — check Wi‑Fi/Ethernet")
+            if (BuildConfig.WUPLAY_MODE) {
+                val pub = Prefs.publicHost(this@MainActivity)
+                if (pub != null) {
+                    appendLine("Public (WuPlay): $pub:$port")
+                } else {
+                    appendLine("Public (WuPlay): not set — tap Set public IP")
+                }
+            }
             lastVerifyMessage?.let { appendLine(it) }
             appendLine()
             append(AddonConfig.summaryLine(this@MainActivity))
@@ -325,7 +394,7 @@ class MainActivity : AppCompatActivity() {
             current.streamQuality,
         )
         val resultMode = field(
-            "resultMode: fast (default) or complete",
+            "resultMode: fastest (debrid required), fast (default), or complete",
             current.resultMode,
         )
         val cacheGb = field("cacheMaxGb", current.cacheMaxGb.toString()).apply {
@@ -434,6 +503,60 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Use auto") { _, _ ->
                 Prefs.setManualLanHost(this, null)
+                refreshUi()
+            }
+            .show()
+    }
+
+    private fun detectPublicIpQuiet() {
+        scope.launch {
+            val ip = withContext(Dispatchers.IO) { PublicIpDetector.detect() }
+            if (ip != null && Prefs.publicHost(this@MainActivity) == null) {
+                Prefs.setPublicHost(this@MainActivity, ip)
+                refreshUi()
+            }
+        }
+    }
+
+    private fun promptPublicIp() {
+        val port = Prefs.serverPort(this)
+        val lan = Prefs.lanHost(this)
+        val input = EditText(this).apply {
+            hint = "e.g. 85.123.45.67"
+            setText(Prefs.publicHost(this@MainActivity).orEmpty())
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Public IP for WuPlay")
+            .setMessage(
+                "config.wuplay.app is on the internet — it cannot Preview a 192.168.x.x URL.\n\n" +
+                    "Forward TCP $port on your router to this TV ($lan), then use your public IP here.\n\n" +
+                    "Test on phone with Wi‑Fi OFF:\nhttp://PUBLIC_IP:$port/health",
+            )
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                Prefs.setPublicHost(this, input.text.toString())
+                statusText.text = "WuPlay URL: ${Prefs.wuplayInstallUrl(this)}"
+                refreshUi()
+            }
+            .setNeutralButton("Detect") { _, _ ->
+                statusText.text = "Detecting public IP…"
+                scope.launch {
+                    val ip = withContext(Dispatchers.IO) { PublicIpDetector.detect() }
+                    if (ip == null) {
+                        statusText.text = "Could not detect public IP — type it from whatismyip.com"
+                        Toast.makeText(this@MainActivity, "Detect failed", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Prefs.setPublicHost(this@MainActivity, ip)
+                        statusText.text = "Public IP: $ip"
+                        refreshUi()
+                    }
+                }
+            }
+            .setNegativeButton("Clear") { _, _ ->
+                Prefs.setPublicHost(this, null)
+                statusText.text = "Public IP cleared — WuPlay will use LAN (Preview may fail)"
                 refreshUi()
             }
             .show()

@@ -50,7 +50,7 @@ object VideoHandler {
         if (entry == null || entry.url.isBlank()) {
             return json(
                 Status.NOT_FOUND,
-                """{"error":"Unknown stream","hint":"Open the stream list in Stremio first"}""",
+                """{"error":"Unknown stream","hint":"Open the stream list in ${app.localcache.AppVariant.clientName} first"}""",
             )
         }
 

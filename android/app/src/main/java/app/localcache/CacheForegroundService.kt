@@ -121,7 +121,7 @@ class CacheForegroundService : Service() {
 
     companion object {
         private const val TAG = "CacheForegroundService"
-        private const val CHANNEL_ID = "local_cache_release"
+        private val CHANNEL_ID: String get() = BuildConfig.PREFS_FILE
         private const val NOTIFICATION_ID = 1
         private const val WAKE_LOCK_TIMEOUT_MS = 8L * 60 * 60 * 1000
 

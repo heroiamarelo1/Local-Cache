@@ -25,6 +25,8 @@ object AddonConfig {
 
     /** Answer sooner: shorter wait, fewer streams. Default. */
     const val RESULT_FAST = "fast"
+    /** Race upstreams; hard ~3s for a debrid-cached hit, else fall back to fast. */
+    const val RESULT_FASTEST = "fastest"
     /** Wait for all upstreams and return more streams. */
     const val RESULT_COMPLETE = "complete"
 
@@ -82,9 +84,19 @@ object AddonConfig {
 
         fun isCompleteResults(): Boolean = resultMode == RESULT_COMPLETE
 
-        fun upstreamTimeoutSeconds(): Long = if (isCompleteResults()) 30L else 8L
+        fun isFastestResults(): Boolean = resultMode == RESULT_FASTEST
 
-        fun maxStreamsForClient(): Int = if (isCompleteResults()) 200 else 25
+        fun upstreamTimeoutSeconds(): Long = when {
+            isCompleteResults() -> 30L
+            isFastestResults() -> 3L
+            else -> 8L
+        }
+
+        fun maxStreamsForClient(): Int = when {
+            isCompleteResults() -> 200
+            isFastestResults() -> 8
+            else -> 25
+        }
     }
 
     fun normalizeUrlList(urls: Collection<String>): List<String> =
@@ -93,7 +105,8 @@ object AddonConfig {
     fun normalizeResultMode(mode: String?): String =
         when (mode?.trim()?.lowercase()) {
             RESULT_COMPLETE -> RESULT_COMPLETE
-            RESULT_FAST, RESULT_RELIABLE, "" , null -> RESULT_FAST
+            RESULT_FASTEST -> RESULT_FASTEST
+            RESULT_FAST, RESULT_RELIABLE, "", null -> RESULT_FAST
             else -> RESULT_FAST
         }
 
@@ -334,7 +347,7 @@ object AddonConfig {
     /** @deprecated Use [importFromUsb] with the writable cache dir. */
     fun importFromUsbRoot(context: Context, usbRoot: File): String {
         val writable = Prefs.cacheDirPath(context)?.let { File(it) }
-            ?: File(usbRoot, "Android/data/app.localcache.release/files/LocalCache")
+            ?: File(usbRoot, "Android/data/${context.packageName}/files/LocalCache")
         return importFromUsb(context, usbRoot, writable)
     }
 
@@ -348,7 +361,11 @@ object AddonConfig {
         return buildString {
             append("Quality: ${if (s.is4kSound()) "4K high quality sound" else "1080p (recommended)"}")
             append(
-                " · Results: ${if (s.isCompleteResults()) "complete" else "fast (default)"}",
+                " · Results: " + when {
+                    s.isCompleteResults() -> "complete"
+                    s.isFastestResults() -> "fastest"
+                    else -> "fast (default)"
+                },
             )
             append(
                 " · Debrid: " + if (s.debridServices.isEmpty()) {
@@ -376,7 +393,7 @@ object AddonConfig {
         Local Cache — configuration
         ===========================
 
-        Edit local-cache-config.json in Notepad (or open http://TV_LAN_IP:7100/settings).
+        Edit local-cache-config.json in Notepad (or open http://TV_LAN_IP:${Prefs.DEFAULT_PORT}/settings).
 
         torrentioManifestUrls  (array)  — or legacy torrentioManifestUrl
           One FINAL manifest.json URL per debrid. Torrentio only supports one

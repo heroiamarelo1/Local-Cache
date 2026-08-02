@@ -42,7 +42,6 @@ class UpstreamFetcher(private val context: Context) {
         }
 
         val timeoutS = cfg.upstreamTimeoutSeconds()
-        val client = clientFor(timeoutS)
         val enabled = cfg.debridServices
         val startedAt = System.currentTimeMillis()
         Log.i(
@@ -52,10 +51,40 @@ class UpstreamFetcher(private val context: Context) {
         )
 
         val results = runBlocking(Dispatchers.IO) {
-            if (cfg.isCompleteResults()) {
-                fetchComplete(client, upstreams, type, id, enabled)
-            } else {
-                fetchFast(client, upstreams, type, id, enabled, timeoutS * 1000L)
+            when {
+                cfg.isCompleteResults() ->
+                    fetchComplete(clientFor(timeoutS), upstreams, type, id, enabled)
+                cfg.isFastestResults() -> {
+                    val quick = fetchFastest(
+                        clientFor(timeoutS),
+                        upstreams,
+                        type,
+                        id,
+                        enabled,
+                        cfg.streamQuality,
+                        timeoutS * 1000L,
+                    )
+                    if (quick.isNotEmpty()) {
+                        quick
+                    } else {
+                        // No debrid-cached hit in time (or no debrid selected) → normal fast.
+                        val fastTimeoutS = 8L
+                        Log.i(
+                            TAG,
+                            "fastest: no debrid-cached stream — falling back to fast (${fastTimeoutS}s)",
+                        )
+                        fetchFast(
+                            clientFor(fastTimeoutS),
+                            upstreams,
+                            type,
+                            id,
+                            enabled,
+                            fastTimeoutS * 1000L,
+                        )
+                    }
+                }
+                else ->
+                    fetchFast(clientFor(timeoutS), upstreams, type, id, enabled, timeoutS * 1000L)
             }
         }
 
@@ -78,6 +107,95 @@ class UpstreamFetcher(private val context: Context) {
         upstreams.map { upstream ->
             async { fetchOne(client, upstream, type, id, enabled, calls) }
         }.awaitAll().flatten().distinctBy { it.url }
+    }
+
+    /**
+     * Fastest mode (hard ~3s): race every upstream and return as soon as there is a
+     * **debrid-cached** stream that matches quality, after a tiny grace. Does **not** wait for
+     * a full provider family. Caller falls back to normal [fetchFast] when this returns empty
+     * (no debrid selected, or no cached hit within the cap).
+     */
+    private suspend fun fetchFastest(
+        client: OkHttpClient,
+        upstreams: List<Upstream>,
+        type: String,
+        id: String,
+        enabled: List<String>,
+        quality: String,
+        hardTimeoutMs: Long,
+    ): List<StreamItem> = coroutineScope {
+        if (enabled.isEmpty()) {
+            Log.w(TAG, "fastest: debrid is required — none selected in settings")
+            return@coroutineScope emptyList()
+        }
+
+        val calls = ConcurrentHashMap<String, Call>()
+        val results = Channel<Pair<String, List<StreamItem>>>(Channel.UNLIMITED)
+
+        val jobs = upstreams.map { upstream ->
+            launch {
+                results.send(upstream.name to fetchOne(client, upstream, type, id, enabled, calls))
+            }
+        }
+
+        val collected = mutableListOf<StreamItem>()
+        var remaining = upstreams.size
+        var graceStartedAt: Long? = null
+        val deadline = System.currentTimeMillis() + hardTimeoutMs
+
+        while (remaining > 0) {
+            val now = System.currentTimeMillis()
+            val graceDeadline = graceStartedAt?.plus(GRACE_AFTER_FASTEST_MS)
+            val waitMs = when {
+                graceDeadline != null -> minOf(graceDeadline, deadline) - now
+                else -> deadline - now
+            }
+            if (waitMs <= 0L) break
+
+            val (upstreamName, batch) = withTimeoutOrNull(waitMs) { results.receive() } ?: break
+            remaining--
+            collected += batch
+
+            val good = collected.count { isFastestGoodEnough(it, enabled, quality) }
+            if (graceStartedAt == null && good > 0) {
+                graceStartedAt = System.currentTimeMillis()
+                Log.i(
+                    TAG,
+                    "fastest: ${upstreamName} gave a debrid-cached stream ($good so far) — " +
+                        "grace ${GRACE_AFTER_FASTEST_MS}ms then reply",
+                )
+            } else {
+                Log.i(
+                    TAG,
+                    "fastest: ${upstreamName} replied (${batch.size} streams, $good debrid-cached); " +
+                        "waiting up to ${maxOf(0L, deadline - System.currentTimeMillis())}ms",
+                )
+            }
+        }
+
+        jobs.forEach { it.cancel() }
+        calls.values.forEach { call -> runCatching { call.cancel() } }
+        results.close()
+
+        // Only debrid-cached quality matches — never fall back to uncached.
+        collected.distinctBy { it.url }.filter { isFastestGoodEnough(it, enabled, quality) }
+    }
+
+    /** Debrid-cached (required) + roughly matches quality mode, and not excluded. */
+    private fun isFastestGoodEnough(
+        stream: StreamItem,
+        enabled: List<String>,
+        quality: String,
+    ): Boolean {
+        if (enabled.isEmpty()) return false
+        if (DebridRules.isExcluded(stream)) return false
+        if (!DebridRules.isDebridCached(stream, enabled)) return false
+        return when {
+            quality == AddonConfig.QUALITY_4K_SOUND ->
+                DebridRules.is4K(stream) || DebridRules.is1080ish(stream)
+            else ->
+                DebridRules.is1080ish(stream) || DebridRules.is720Only(stream)
+        }
     }
 
     /**
@@ -181,7 +299,7 @@ class UpstreamFetcher(private val context: Context) {
         return try {
             val request = Request.Builder()
                 .url(url)
-                .header("User-Agent", "LocalCache/0.4.17")
+                .header("User-Agent", "LocalCache/${app.localcache.BuildConfig.VERSION_NAME}")
                 .build()
             val call = client.newCall(request)
             calls[upstream.name] = call
@@ -280,6 +398,7 @@ class UpstreamFetcher(private val context: Context) {
         private const val TAG = "UpstreamFetcher"
         private const val CACHE_TTL_MS = 15 * 60 * 1000L
         private const val GRACE_AFTER_FIRST_MS = 900L
+        private const val GRACE_AFTER_FASTEST_MS = 250L
         private val resultCache = ConcurrentHashMap<String, CachedResult>()
         private val clients = ConcurrentHashMap<Long, OkHttpClient>()
 
@@ -290,8 +409,9 @@ class UpstreamFetcher(private val context: Context) {
 
         private fun clientFor(timeoutS: Long): OkHttpClient =
             clients.getOrPut(timeoutS) {
+                val connectS = minOf(5L, maxOf(1L, timeoutS))
                 OkHttpClient.Builder()
-                    .connectTimeout(minOf(5L, timeoutS), TimeUnit.SECONDS)
+                    .connectTimeout(connectS, TimeUnit.SECONDS)
                     .readTimeout(timeoutS, TimeUnit.SECONDS)
                     .callTimeout(timeoutS, TimeUnit.SECONDS)
                     .build()

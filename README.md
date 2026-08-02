@@ -12,7 +12,7 @@ You pick a stream like usual (Torrentio / Comet). **You can start watching while
 **No more buffering mid-movie.**  
 Once the file is local, your TV isn’t fighting your internet anymore. Smooth playback. That’s the whole point.
 
-**Latest APK:** [v0.4.23](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.4.23)
+**Latest APK:** [v0.4.24](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.4.24)
 
 ---
 
@@ -63,8 +63,9 @@ cd android
 ./gradlew :app:assembleDebug
 ```
 
-Release APK: `./gradlew :app:assembleStandardRelease`  
-Package id: `app.localcache.release`
+Stremio APK: `./gradlew :app:assembleStandardRelease` — package `app.localcache.release` (port **7100**, install `http://127.0.0.1:7100/manifest.json`)
+
+WuPlay APK: `./gradlew :app:assembleWuplayRelease` — package `app.localcache.wuplay` (port **7001**, public IP + router forward for `config.wuplay.app`)
 
 ---
 
@@ -79,7 +80,7 @@ Or read `android/app/src/main/assets/local-cache-config.README.txt`.
 | `cometManifestUrls` | Optional public / ElfHosted Comet |
 | `localCometManifestUrls` | Optional Comet on your LAN |
 | `streamQuality` | `1080p` or `4k_sound` |
-| `resultMode` | `fast` (default) or `complete` |
+| `resultMode` | `fastest` (debrid hit or fall back to fast), `fast` (default), or `complete` |
 | `debridServices` | Only the debrids you actually use |
 
 ---

@@ -98,11 +98,29 @@ object HealthCheck {
             items += HealthItem(false, "LAN /health", "Start the server first")
         }
 
-        items += HealthItem(
-            true,
-            "Stremio install",
-            Prefs.stremioInstallUrl(context),
-        )
+        if (app.localcache.BuildConfig.WUPLAY_MODE) {
+            val publicHost = Prefs.publicHost(context)
+            items += HealthItem(
+                publicHost != null,
+                "Public IP (WuPlay)",
+                if (publicHost != null) {
+                    Prefs.wuplayInstallUrl(context)
+                } else {
+                    "Not set — config.wuplay.app cannot Preview LAN URLs. Tap Set public IP."
+                },
+            )
+            items += HealthItem(
+                true,
+                "WuPlay install URL",
+                Prefs.wuplayInstallUrl(context),
+            )
+        } else {
+            items += HealthItem(
+                true,
+                "Stremio install",
+                Prefs.stremioInstallUrl(context),
+            )
+        }
 
         return HealthReport(items)
     }
@@ -121,7 +139,7 @@ object HealthCheck {
         append('\n')
         if (report.allOk) {
             append("All checks passed.\n")
-            append("Stremio: ${Prefs.stremioInstallUrl(context)}")
+            append("${AppVariant.clientName}: ${Prefs.clientInstallUrl(context)}")
         } else {
             append("Fix the FAIL items, then run Health check again.")
         }

@@ -30,7 +30,7 @@ object LanReachability {
                     LanVerifyResult(
                         ok = true,
                         host = host,
-                        message = "Verified — phone/Stremio can reach http://$host:$port",
+                        message = "Verified — phone/${app.localcache.AppVariant.clientName} can reach http://$host:$port",
                     )
                 } else {
                     LanVerifyResult(

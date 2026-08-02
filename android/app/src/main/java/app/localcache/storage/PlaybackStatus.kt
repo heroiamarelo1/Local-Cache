@@ -48,7 +48,7 @@ object PlaybackStatus {
         val detailLabel = humanDetail(detail)
         return JSONObject()
             .put("ok", true)
-            .put("downloadTitle", parts?.title ?: "Idle — ready for Stremio")
+            .put("downloadTitle", parts?.title ?: app.localcache.AppVariant.idleReadyLine())
             .put("downloadStats", parts?.stats.orEmpty())
             .put("downloadLine", DownloadEngine.statusLine())
             .put("downloadKey", key)

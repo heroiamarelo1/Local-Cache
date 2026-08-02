@@ -1,6 +1,7 @@
 package app.localcache.server
 
 import android.content.Context
+import app.localcache.AppVariant
 import app.localcache.BuildConfig
 import app.localcache.Prefs
 import app.localcache.config.AddonConfig
@@ -8,11 +9,13 @@ import app.localcache.storage.DiskQuota
 import app.localcache.storage.DownloadEngine
 import app.localcache.storage.StorageMode
 import app.localcache.storage.UsbDriveDetector
+import app.localcache.update.UpdateChecker
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Method
 import fi.iki.elonen.NanoHTTPD.Response
 import java.util.Locale
+import kotlin.concurrent.thread
 
 object SettingsPage {
 
@@ -75,6 +78,9 @@ object SettingsPage {
                     cacheMaxGb = first("cacheMaxGb").toIntOrNull() ?: Prefs.DEFAULT_CACHE_MAX_GB,
                     resultMode = first("resultMode").ifBlank { AddonConfig.RESULT_FAST },
                 )
+                if (BuildConfig.WUPLAY_MODE) {
+                    Prefs.setPublicHost(context, first("publicHost").ifBlank { null })
+                }
                 messages += AddonConfig.save(context, snapshot, writeUsb = true)
             }
         }
@@ -148,10 +154,30 @@ object SettingsPage {
         }
         val q1080 = if (snapshot.streamQuality != AddonConfig.QUALITY_4K_SOUND) "checked" else ""
         val q4k = if (snapshot.streamQuality == AddonConfig.QUALITY_4K_SOUND) "checked" else ""
-        val mFast = if (!snapshot.isCompleteResults()) "checked" else ""
+        val mFastest = if (snapshot.isFastestResults()) "checked" else ""
+        val mFast = if (!snapshot.isCompleteResults() && !snapshot.isFastestResults()) "checked" else ""
         val mComplete = if (snapshot.isCompleteResults()) "checked" else ""
         val banner = when {
             saved -> """<div class="ok">${escape(status.orEmpty()).replace("\n", "<br/>")}</div>"""
+            else -> ""
+        }
+        // Kick a background check; page may show a cached result immediately.
+        thread(name = "update-check", isDaemon = true) {
+            runCatching { UpdateChecker.check(force = false) }
+        }
+        val update = UpdateChecker.peek()
+        val updateBanner = when {
+            update?.updateAvailable == true -> {
+                val apk = update.apkUrl ?: update.releaseUrl ?: UpdateChecker.REPO_RELEASES_URL
+                """
+                <div class="update">
+                  <b>Update available:</b> v${escape(update.latestVersion.orEmpty())}
+                  (you have v${escape(update.currentVersion)})<br/>
+                  <a href="${escape(apk)}" target="_blank" rel="noopener">Download latest APK</a>
+                  · <a href="${escape(update.releaseUrl ?: UpdateChecker.REPO_RELEASES_URL)}" target="_blank" rel="noopener">Release notes</a>
+                </div>
+                """.trimIndent()
+            }
             else -> ""
         }
 
@@ -216,7 +242,14 @@ object SettingsPage {
     .url-row { display: flex; align-items: center; margin-top: 8px; }
     .url-row input { flex: 1; }
     .ok { background: #1e3a2f; border: 1px solid #34a853; padding: 10px; border-radius: 8px; margin-bottom: 16px; }
+    .update { background: #1a2740; border: 1px solid #8ab4f8; padding: 12px; border-radius: 8px; margin-bottom: 16px; line-height: 1.45; }
     .warn { background: #3a2e1e; border: 1px solid #f9ab00; padding: 10px; border-radius: 8px; margin: 8px 0 0; font-size: 0.9rem; }
+    .donate { margin-top: 36px; padding-top: 20px; border-top: 1px solid #3c4043; text-align: center; }
+    a.donate-btn {
+      display: inline-block; margin-top: 8px; padding: 12px 22px; border-radius: 8px;
+      background: #0070ba; color: #fff; font-weight: 700; text-decoration: none;
+    }
+    a.donate-btn:hover { background: #005ea6; }
     .live { background: #1a1d23; border: 1px solid #3c4043; border-radius: 10px; padding: 12px; margin-bottom: 20px; }
     .live h2 { font-size: 1rem; margin: 0 0 10px; color: #e8eaed; }
     #liveStatus { font-size: 0.95rem; line-height: 1.45; }
@@ -232,7 +265,9 @@ object SettingsPage {
 </head>
 <body>
   <h1>Local Cache</h1>
-  <p class="sub">Configure upstream manifests and preferences. Same Wi‑Fi only — no router changes needed.</p>
+  <p class="sub">Configure upstream manifests and preferences. Same Wi‑Fi only — no router changes needed.
+    App version v${escape(BuildConfig.VERSION_NAME)}.</p>
+  $updateBanner
   $banner
 
   <div class="live">
@@ -268,12 +303,28 @@ object SettingsPage {
 
     <label>Result speed</label>
     <div class="box">
+      <label class="row"><input type="radio" name="resultMode" value="fastest" $mFastest> Fastest — ~1–3s for a debrid-cached stream (helps Stremio not skip Local Cache)</label>
       <label class="row"><input type="radio" name="resultMode" value="fast" $mFast> Fast (default) — answer sooner, fewer streams</label>
       <label class="row"><input type="radio" name="resultMode" value="complete" $mComplete> Complete — wait for all upstreams, more streams</label>
     </div>
+    <p class="hint">Fastest prefers a debrid-cached hit quickly. If none is found in time, it falls back to Fast automatically.</p>
 
     <label>Cache max (GB)</label>
     <input type="number" name="cacheMaxGb" min="1" max="4096" value="${snapshot.cacheMaxGb}"/>
+
+    ${
+        if (BuildConfig.WUPLAY_MODE) {
+            val publicHost = Prefs.publicHost(context).orEmpty()
+            val lanHost = Prefs.lanHost(context)
+            """
+    <label>Public IP for WuPlay (config.wuplay.app Preview)</label>
+    <input type="text" name="publicHost" value="${escape(publicHost)}" placeholder="from whatismyip.com — needs router port forward $port → $lanHost"/>
+    <p class="hint">WuPlay’s website is on the internet — it cannot Preview 192.168.x.x. Forward TCP $port to this TV, then paste your public IP.</p>
+            """.trimIndent()
+        } else {
+            ""
+        }
+    }
 
     <button type="submit" name="action" value="save">Save</button>
 
@@ -322,10 +373,22 @@ object SettingsPage {
     </div>
   </form>
   <p class="hint" style="margin-top:24px">
-    After you Save here: on the TV open Stremio → Add-ons → Add Add-on →
+    ${
+        if (BuildConfig.WUPLAY_MODE) {
+            """After you Save here: install in WuPlay with
+    <code>${escape(Prefs.wuplayInstallUrl(context))}</code>
+    (needs public IP + router forward; Local Cache server must be running)."""
+        } else {
+            """After you Save here: on the TV open Stremio → Add-ons → Add Add-on →
     <code>http://127.0.0.1:$port/manifest.json</code>
-    (Local Cache server must be running).
+    (Local Cache server must be running)."""
+        }
+    }
   </p>
+  <div class="donate">
+    <p class="hint">If Local Cache helps your movie nights, you can buy me a coffee ☕</p>
+    <a class="donate-btn" href="${escape(UpdateChecker.DONATE_URL)}" target="_blank" rel="noopener">Donate via PayPal</a>
+  </div>
   <script>
     function addUrl(listId, name, placeholder) {
       var list = document.getElementById(listId);
@@ -348,7 +411,7 @@ object SettingsPage {
     function refreshLive() {
       fetch('/status').then(function(r) { return r.json(); }).then(function(s) {
         var el = document.getElementById('liveStatus');
-        var title = s.downloadTitle || 'Idle — ready for Stremio';
+        var title = s.downloadTitle || 'Idle — ready for ${escape(AppVariant.clientName)}';
         var stats = s.downloadStats || '';
         var storage = (s.internal ? 'Internal' : (s.storageMode === 'usb' ? 'USB' : 'None'));
         if (s.quotaSummary) storage += ' · ' + s.quotaSummary;

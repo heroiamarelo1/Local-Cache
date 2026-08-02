@@ -6,15 +6,14 @@ import app.localcache.net.LanAddress
 import app.localcache.net.LanIpDetector
 
 object Prefs {
-    private const val FILE = "local_cache_release"
-    /** Own port range so this app never steals the WuPlay Local Cache server. */
-    const val DEFAULT_PORT = 7100
+    /** Stremio build: 7100. WuPlay build: 7001 (see [BuildConfig.DEFAULT_PORT]). */
+    val DEFAULT_PORT: Int get() = BuildConfig.DEFAULT_PORT
 
     /** Leaves headroom on a 128 GB stick, which formats to about 114 GiB. */
     const val DEFAULT_CACHE_MAX_GB = 100
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        context.getSharedPreferences(BuildConfig.PREFS_FILE, Context.MODE_PRIVATE)
 
     fun cacheMaxGb(context: Context): Int =
         prefs(context).getInt("cache_max_gb", DEFAULT_CACHE_MAX_GB)
@@ -167,14 +166,51 @@ object Prefs {
         return "192.168.1.83"
     }
 
+    /**
+     * Public (WAN) IP for WuPlay install via config.wuplay.app.
+     * Requires router port-forward: external :port → this TV's LAN IP :port.
+     */
+    fun publicHost(context: Context): String? =
+        prefs(context).getString("public_host", null)?.takeIf { it.isNotBlank() }
+
+    fun setPublicHost(context: Context, host: String?) {
+        prefs(context).edit()
+            .putString("public_host", host?.trim()?.ifBlank { null })
+            .apply()
+    }
+
+    /** Host WuPlay should use — public IP preferred, else LAN. */
+    fun wuplayHost(context: Context): String = publicHost(context) ?: lanHost(context)
+
+    fun wuplayInstallUrl(context: Context): String =
+        "http://${wuplayHost(context)}:${serverPort(context)}/manifest.json"
+
+    fun publicInstallUrl(context: Context): String? {
+        val host = publicHost(context) ?: return null
+        return "http://$host:${serverPort(context)}/manifest.json"
+    }
+
+    /** Stremio: loopback. WuPlay: public/LAN URL for config.wuplay.app. */
     fun stremioInstallUrl(context: Context): String =
-        "http://127.0.0.1:${serverPort(context)}/manifest.json"
+        if (BuildConfig.WUPLAY_MODE) {
+            wuplayInstallUrl(context)
+        } else {
+            "http://127.0.0.1:${serverPort(context)}/manifest.json"
+        }
+
+    /** Player / addon install URL for the active client. */
+    fun clientInstallUrl(context: Context): String = stremioInstallUrl(context)
 
     fun settingsUrl(context: Context): String =
         "http://${lanHost(context)}:${serverPort(context)}/settings"
 
     fun healthUrl(context: Context): String =
         "http://${lanHost(context)}:${serverPort(context)}/health"
+
+    fun publicHealthUrl(context: Context): String? {
+        val host = publicHost(context) ?: return null
+        return "http://$host:${serverPort(context)}/health"
+    }
 
     fun allDetected(context: Context): List<LanAddress> = LanIpDetector.detectAll(context)
 

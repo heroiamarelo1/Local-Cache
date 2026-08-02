@@ -1,6 +1,7 @@
 package app.localcache.stream
 
 import android.content.Context
+import app.localcache.BuildConfig
 import app.localcache.Prefs
 import app.localcache.config.AddonConfig
 import app.localcache.model.StreamItem
@@ -22,17 +23,25 @@ object StreamDiagnostics {
             completeResults = cfg.isCompleteResults(),
         )
 
+        val note = if (BuildConfig.WUPLAY_MODE) {
+            "Configure /settings first, then install in WuPlay with the public IP URL (port forward required)."
+        } else {
+            "Configure /settings first, then install in Stremio with 127.0.0.1. Use LAN IP for /settings and /health from your phone."
+        }
+
         return JSONObject()
             .put("ok", true)
             .put("lanHost", lanHost)
+            .put("publicHost", Prefs.publicHost(context))
             .put("port", port)
-            .put("stremioInstall", "http://127.0.0.1:$port/manifest.json")
+            .put("stremioInstall", Prefs.stremioInstallUrl(context))
+            .put("wuplayInstall", Prefs.wuplayInstallUrl(context))
             .put("settings", "http://$lanHost:$port/settings")
             .put("health", "http://$lanHost:$port/health")
             .put("upstreamsConfigured", cfg.hasAnyUpstream())
             .put("streamQuality", cfg.streamQuality)
             .put("resultMode", cfg.resultMode)
-            .put("note", "Configure /settings first, then install in Stremio with 127.0.0.1. Use LAN IP for /settings and /health from your phone.")
+            .put("note", note)
             .put("testMovie", TEST_MOVIE)
             .put("rawUpstreamCount", all.size)
             .put("strictFilterCount", strict.size)

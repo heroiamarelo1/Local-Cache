@@ -2,6 +2,7 @@ package app.localcache.server
 
 import android.content.Context
 import android.util.Log
+import app.localcache.BuildConfig
 import app.localcache.Prefs
 import app.localcache.config.AddonConfig
 import app.localcache.model.StreamPick
@@ -81,19 +82,33 @@ class LocalHttpServer(
         when {
             uri == "/health" -> {
                 val host = Prefs.lanHost(appContext)
+                val publicHost = Prefs.publicHost(appContext)
                 val cfg = AddonConfig.load(appContext)
                 val body = org.json.JSONObject()
                     .put("ok", true)
                     .put("lanHost", host)
+                    .put("publicHost", publicHost)
                     .put("port", listeningPort)
-                    .put("stremioInstall", "http://127.0.0.1:$listeningPort/manifest.json")
+                    .put("stremioInstall", Prefs.stremioInstallUrl(appContext))
+                    .put("wuplayInstall", Prefs.wuplayInstallUrl(appContext))
                     .put("settings", "http://$host:$listeningPort/settings")
                     .put("upstreamsConfigured", cfg.hasAnyUpstream())
                     .put("streamQuality", cfg.streamQuality)
                     .put("resultMode", cfg.resultMode)
                     .put("debridServices", org.json.JSONArray(cfg.debridServices))
                     .put("partialPlay", true)
-                    .put("note", "Open this URL from a phone on the same Wi‑Fi. No router changes needed.")
+                    .put(
+                        "note",
+                        if (BuildConfig.WUPLAY_MODE) {
+                            if (publicHost != null) {
+                                "WuPlay install uses public IP (router forward :$listeningPort → $host). Phone settings stay on LAN."
+                            } else {
+                                "Set public IP in the app so config.wuplay.app can Preview. Phone /settings uses LAN."
+                            }
+                        } else {
+                            "Open this URL from a phone on the same Wi‑Fi. No router changes needed."
+                        },
+                    )
                 return jsonResponse(Response.Status.OK, body.toString())
             }
 
@@ -147,14 +162,17 @@ class LocalHttpServer(
             uri == "/manifest.json" -> {
                 val cfg = AddonConfig.load(appContext)
                 val qualityNote = if (cfg.is4kSound()) "4K sound" else "1080p"
+                val installUrl = Prefs.clientInstallUrl(appContext)
+                val appName = if (BuildConfig.WUPLAY_MODE) "Local Cache WuPlay" else "Local Cache"
+                val descClient = if (BuildConfig.WUPLAY_MODE) "WuPlay" else "Stremio"
                 return jsonResponse(
                     Response.Status.OK,
                     """
                     {
-                      "id": "org.localcache.release",
-                      "version": "0.4.23",
-                      "name": "Local Cache",
-                      "description": "Local Stremio cache · $qualityNote · install http://127.0.0.1:$listeningPort/manifest.json",
+                      "id": "${BuildConfig.ADDON_ID}",
+                      "version": "${BuildConfig.VERSION_NAME}",
+                      "name": "$appName",
+                      "description": "Local $descClient cache · $qualityNote · install $installUrl",
                       "resources": [
                         { "name": "stream", "types": ["movie", "series"], "idPrefixes": ["tt"] }
                       ],
@@ -235,7 +253,7 @@ class LocalHttpServer(
                     topFile = topName,
                 )
 
-                // Prefer loopback when Stremio installed via 127.0.0.1 — more reliable on-device.
+                // Stremio: prefer loopback. WuPlay: match Host (often public IP via port forward).
                 val videoHost = resolveVideoHost(session)
                 val storageLabel = if (StorageMode.isInternal(appContext)) "device" else "USB"
                 val json = StreamResponseBuilder.toJson(
@@ -281,6 +299,17 @@ class LocalHttpServer(
 
     private fun resolveVideoHost(session: IHTTPSession): String {
         val caller = callerHost(session)?.trim().orEmpty()
+        if (BuildConfig.WUPLAY_MODE) {
+            if (caller.isNotBlank() &&
+                caller != "127.0.0.1" &&
+                caller != "localhost" &&
+                caller != "[::1]" &&
+                caller != "::1"
+            ) {
+                return caller.removePrefix("[").removeSuffix("]")
+            }
+            return Prefs.wuplayHost(appContext)
+        }
         if (caller == "127.0.0.1" || caller == "localhost" || caller == "[::1]" || caller == "::1") {
             return "127.0.0.1"
         }

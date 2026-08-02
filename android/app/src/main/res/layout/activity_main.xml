@@ -95,6 +95,14 @@
                     android:text="Refresh LAN IP" />
 
                 <Button
+                    android:id="@+id/btnPublicIp"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Set public IP (WuPlay)"
+                    android:visibility="gone" />
+
+                <Button
                     android:id="@+id/btnCancelDownload"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -123,9 +131,19 @@
                 android:orientation="vertical">
 
                 <TextView
+                    android:id="@+id/updateText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textColor="#8AB4F8"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
+
+                <TextView
                     android:id="@+id/statusText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
                     android:text="Stopped"
                     android:textSize="15sp"
                     android:textStyle="bold" />

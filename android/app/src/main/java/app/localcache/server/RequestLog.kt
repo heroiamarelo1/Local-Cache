@@ -35,7 +35,7 @@ object RequestLog {
     }
 
     fun summary(): String = when (val line = lastLine) {
-        null -> "No stream request received yet — Stremio has not called the add-on"
+        null -> "No stream request received yet — ${app.localcache.AppVariant.clientName} has not called the add-on"
         else -> "Last request (#$count): $line"
     }
 }

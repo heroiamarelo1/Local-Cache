@@ -1,12 +1,21 @@
 package app.localcache.server
 
+import app.localcache.BuildConfig
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 
 object PortFinder {
-    /** Kept clear of the WuPlay Local Cache ports (7000/7001/…). */
-    val candidates = listOf(7100, 7101, 7110, 8766, 11471, 8091, 8889)
+    /**
+     * Stremio: 7100+ (keeps clear of WuPlay 7000/7001).
+     * WuPlay: 7001+ (keeps clear of old 7000 cache and Stremio 7100).
+     */
+    val candidates: List<Int>
+        get() = if (BuildConfig.WUPLAY_MODE) {
+            listOf(7001, 7002, 7011, 7020, 8765, 11470, 8090)
+        } else {
+            listOf(7100, 7101, 7110, 8766, 11471, 8091, 8889)
+        }
 
     fun isFree(port: Int): Boolean {
         return try {

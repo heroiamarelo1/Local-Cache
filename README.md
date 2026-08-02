@@ -16,13 +16,6 @@ Once the file is local, your TV isn’t fighting your internet anymore. Smooth p
 
 ---
 
-## Why bother? 😤➡️😌
-
-Internet hiccups mid-movie suck.  
-If the file is already on USB, your TV doesn’t care what the cloud is doing tonight.
-
----
-
 ## Debrid? ⚡
 
 **A debrid service is recommended** (AllDebrid, TorBox, etc.) — faster starts, more “instant” links, happier evenings.
@@ -33,7 +26,7 @@ If the file is already on USB, your TV doesn’t care what the cloud is doing to
 
 ## What you get 🧰
 
-- 📺 Stremio add-on living on the TV (`http://127.0.0.1:7100/manifest.json`)
+- 📺 Stremio add-on living on the TV (`http://127.0.0.1:7100/manifest.json`) and the APK that runs the local server
 - ▶️ **Play while downloading** — don’t wait for 100%
 - 💾 **USB recommended**, or **internal storage** fallback (quality compromises — TV storage is limited)
 - 🧠 Smart picks — prefers cached debrid links, 1080p or 4K+sound mode; on internal storage, prefers a stream that **fits free space**

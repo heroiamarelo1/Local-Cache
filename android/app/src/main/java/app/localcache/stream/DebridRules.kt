@@ -97,7 +97,8 @@ object DebridRules {
             .joinToString("\n")
 
     fun enabledServices(names: Collection<String>): List<DebridService> {
-        if (names.isEmpty()) return DebridService.entries.toList()
+        // Empty = user selected none (do not treat as “all services”).
+        if (names.isEmpty()) return emptyList()
         return DebridService.entries.filter { service ->
             names.any { it.equals(service.configName, ignoreCase = true) }
         }

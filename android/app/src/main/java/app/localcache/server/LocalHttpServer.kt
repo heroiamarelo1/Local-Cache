@@ -9,6 +9,8 @@ import app.localcache.storage.CacheRegistry
 import app.localcache.storage.DiskQuota
 import app.localcache.storage.DownloadEngine
 import app.localcache.storage.LocalLibrary
+import app.localcache.storage.PlaybackStatus
+import app.localcache.storage.StorageMode
 import app.localcache.stream.StreamDiagnostics
 import app.localcache.stream.StreamLabelFormatter
 import app.localcache.stream.StreamResponseBuilder
@@ -99,11 +101,22 @@ class LocalHttpServer(
                 return SettingsPage.serve(appContext, session)
             }
 
+            uri == "/status" -> {
+                val body = PlaybackStatus.snapshot()
+                    .put("storageMode", Prefs.storageMode(appContext))
+                    .put("cacheDir", Prefs.cacheDirPath(appContext))
+                    .put("internal", StorageMode.isInternal(appContext))
+                    .put("quotaSummary", DiskQuota.summary(appContext))
+                    .put("roomBytes", StorageMode.roomBytesForNewFile(appContext))
+                return jsonResponse(Response.Status.OK, body.toString())
+            }
+
             uri == "/cache" -> {
                 val cacheDir = Prefs.cacheDirPath(appContext) ?: "not set"
                 val entries = CacheRegistry.snapshot()
                 val body = org.json.JSONObject()
                     .put("cacheDir", cacheDir)
+                    .put("storageMode", Prefs.storageMode(appContext))
                     .put("quota", org.json.JSONObject(DiskQuota.asJson(appContext)))
                     .put("quotaSummary", DiskQuota.summary(appContext))
                     .put("config", AddonConfig.toJson(AddonConfig.load(appContext)))
@@ -139,7 +152,7 @@ class LocalHttpServer(
                     """
                     {
                       "id": "org.localcache.release",
-                      "version": "0.4.16",
+                      "version": "0.4.23",
                       "name": "Local Cache",
                       "description": "Local Stremio cache · $qualityNote · install http://127.0.0.1:$listeningPort/manifest.json",
                       "resources": [
@@ -187,18 +200,25 @@ class LocalHttpServer(
                     emptyList()
                 }
 
+                val maxFitBytes = if (StorageMode.isInternal(appContext)) {
+                    StorageMode.roomBytesForNewFile(appContext)
+                } else {
+                    0L
+                }
                 val built = TvStreamOrder.buildOrdered(
                     allStreams = all,
                     onDrive = onDrive,
                     quality = cfg.streamQuality,
                     enabledDebrid = cfg.debridServices,
                     completeResults = cfg.isCompleteResults(),
+                    maxFitBytes = maxFitBytes,
                 )
                 Log.i(
                     TAG,
                     "stream $type/$id raw=${built.rawCount} strict=${built.strictCount} out=${built.picks.size} fallback=${built.usedFallback}",
                 )
                 built.picks.forEach { pick ->
+                    if (pick.slot == "fits_none") return@forEach
                     CacheRegistry.register(pick.stream, type, id)
                     CacheRegistry.attachCachePath(appContext, pick.stream.cacheKey)
                 }
@@ -217,6 +237,7 @@ class LocalHttpServer(
 
                 // Prefer loopback when Stremio installed via 127.0.0.1 — more reliable on-device.
                 val videoHost = resolveVideoHost(session)
+                val storageLabel = if (StorageMode.isInternal(appContext)) "device" else "USB"
                 val json = StreamResponseBuilder.toJson(
                     lanHost = lanHost,
                     port = listeningPort,
@@ -229,6 +250,7 @@ class LocalHttpServer(
                     videoHost = videoHost,
                     enabledDebrid = cfg.debridServices,
                     configured = cfg.hasAnyUpstream(),
+                    storageLabel = storageLabel,
                 )
                 Log.i(TAG, "stream response bytes=${json.length} videoHost=$videoHost sample=${json.take(180)}")
                 return jsonResponse(Response.Status.OK, json)
@@ -276,6 +298,9 @@ class LocalHttpServer(
     private fun jsonResponse(status: Response.Status, body: String): Response {
         return newFixedLengthResponse(status, "application/json; charset=utf-8", body).apply {
             addCorsHeaders()
+            // Stremio otherwise keeps an old stream list after USB ↔ internal switches.
+            addHeader("Cache-Control", "no-store, no-cache, must-revalidate")
+            addHeader("Pragma", "no-cache")
         }
     }
 

@@ -188,11 +188,35 @@ object Prefs {
     fun usbLabel(context: Context): String? =
         prefs(context).getString("usb_label", null)
 
+    fun storageMode(context: Context): String =
+        prefs(context).getString("storage_mode", null)
+            ?: if (cacheDirPath(context) != null) "usb" else ""
+
     fun setUsbSelection(context: Context, cacheDirPath: String, label: String, usbRootPath: String) {
         prefs(context).edit()
+            .putString("storage_mode", "usb")
             .putString("cache_dir_path", cacheDirPath)
             .putString("usb_label", label)
             .putString("usb_root_path", usbRootPath)
+            .apply()
+    }
+
+    fun setInternalSelection(context: Context, cacheDirPath: String, cacheMaxGb: Int) {
+        prefs(context).edit()
+            .putString("storage_mode", "internal")
+            .putString("cache_dir_path", cacheDirPath)
+            .putString("usb_label", "Internal storage")
+            .remove("usb_root_path")
+            .putInt("cache_max_gb", cacheMaxGb.coerceIn(1, 4096))
+            .apply()
+    }
+
+    fun clearStorageSelection(context: Context) {
+        prefs(context).edit()
+            .remove("storage_mode")
+            .remove("cache_dir_path")
+            .remove("usb_label")
+            .remove("usb_root_path")
             .apply()
     }
 }

@@ -95,10 +95,23 @@ object StreamLabelFormatter {
         progress: Int,
         status: String?,
         enabledDebrid: List<String>,
+        slot: String? = null,
+        storageLabel: String = "USB",
     ): String {
         val res = resolutionToken(stream)
         val cached = DebridRules.isDebridCached(stream, enabledDebrid)
         val st = status?.lowercase().orEmpty()
+
+        if (slot == "fits_internal") {
+            return when {
+                progress >= 100 || st == "complete" ->
+                    "✅ Local Cache $res · Ready on device"
+                st == "downloading" && progress > 0 ->
+                    "💾 Local Cache $res · Fits device · $progress%"
+                else ->
+                    "💾 Local Cache $res · Fits device"
+            }
+        }
 
         return when {
             progress >= 100 || st == "complete" ->
@@ -108,7 +121,7 @@ object StreamLabelFormatter {
             st == "paused" ->
                 "⬇️ Local Cache $res · $progress% paused — tap to play/resume"
             progress > 0 ->
-                "⬇️ Local Cache $res · $progress% on USB"
+                "⬇️ Local Cache $res · $progress% on $storageLabel"
             cached ->
                 "⚡ Local Cache $res · Start download"
             else ->
@@ -121,12 +134,16 @@ object StreamLabelFormatter {
         progress: Int,
         status: String?,
         enabledDebrid: List<String>,
+        slot: String? = null,
+        storageLabel: String = "USB",
     ): String {
         val mark = DebridRules.displayCacheMark(stream, enabledDebrid)
         val size = sizeLabel(stream)
         val source = stream.source.takeIf { it.isNotBlank() }
         val head = listOfNotNull(mark, size).joinToString(" ")
         val line1 = when {
+            slot == "fits_internal" && head.isNotBlank() ->
+                "$head · best that fits $storageLabel"
             head.isNotBlank() && source != null -> "$head · $source"
             head.isNotBlank() -> head
             source != null -> source
@@ -137,10 +154,11 @@ object StreamLabelFormatter {
 
         val st = status?.lowercase().orEmpty()
         val line3 = when {
-            progress >= 100 || st == "complete" -> "✅ 100% on USB"
+            progress >= 100 || st == "complete" -> "✅ 100% on $storageLabel"
             st == "downloading" && progress > 0 -> "⬇️ $progress% downloading"
             st == "paused" -> "⬇️ $progress% paused — tap to play/resume"
-            progress > 0 -> "⬇️ $progress% on USB"
+            progress > 0 -> "⬇️ $progress% on $storageLabel"
+            slot == "fits_internal" -> "Sized to fit free space — larger picks below still stream"
             else -> null
         }
 

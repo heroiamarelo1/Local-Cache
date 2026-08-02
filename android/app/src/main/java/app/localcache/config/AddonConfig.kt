@@ -11,8 +11,8 @@ import java.io.File
 /**
  * User configuration for Local Cache.
  *
- * Lives primarily in [Prefs], synced with `local-cache-config.json` on the USB root
- * after Choose USB (and rewritten when settings change from TV or /settings).
+ * Lives primarily in [Prefs], with a JSON copy next to the movies folder when possible
+ * (USB root / USB cache dir, or internal LocalCache folder).
  */
 object AddonConfig {
     private const val TAG = "AddonConfig"
@@ -104,7 +104,7 @@ object AddonConfig {
     }
 
     fun load(context: Context): Snapshot {
-        val services = Prefs.debridServices(context).ifEmpty { ALL_DEBRID_SERVICES }
+        val services = Prefs.debridServices(context)
         val quality = Prefs.streamQuality(context).let {
             if (it == QUALITY_4K_SOUND) QUALITY_4K_SOUND else QUALITY_1080P
         }
@@ -130,7 +130,7 @@ object AddonConfig {
                 .mapNotNull { name ->
                     ALL_DEBRID_SERVICES.firstOrNull { it.equals(name, ignoreCase = true) }
                 }
-                .ifEmpty { ALL_DEBRID_SERVICES },
+                .distinct(),
             streamQuality = if (snapshot.streamQuality == QUALITY_4K_SOUND) {
                 QUALITY_4K_SOUND
             } else {
@@ -156,7 +156,7 @@ object AddonConfig {
             Prefs.setConfigStatus(
                 context,
                 written?.let { "Saved · ${it.absolutePath}" }
-                    ?: "Saved on TV (USB write blocked — edit via /settings or create the JSON on a PC)",
+                    ?: "Saved on TV (could not write JSON beside movies — prefs updated)",
             )
             return Prefs.configStatus(context)!!
         }
@@ -191,7 +191,7 @@ object AddonConfig {
             torrentioManifestUrls = readUrlListFromJson(obj, "torrentioManifestUrls", "torrentioManifestUrl"),
             cometManifestUrls = readUrlListFromJson(obj, "cometManifestUrls", "cometManifestUrl"),
             localCometManifestUrls = readUrlListFromJson(obj, "localCometManifestUrls", "localCometManifestUrl"),
-            debridServices = services.ifEmpty { ALL_DEBRID_SERVICES },
+            debridServices = services,
             streamQuality = obj.optString("streamQuality", QUALITY_1080P),
             cacheMaxGb = obj.optInt("cacheMaxGb", Prefs.DEFAULT_CACHE_MAX_GB),
             resultMode = normalizeResultMode(obj.optString("resultMode", RESULT_FAST)),
@@ -218,7 +218,7 @@ object AddonConfig {
         torrentioManifestUrls = emptyList(),
         cometManifestUrls = emptyList(),
         localCometManifestUrls = emptyList(),
-        debridServices = ALL_DEBRID_SERVICES,
+        debridServices = emptyList(),
         streamQuality = QUALITY_1080P,
         cacheMaxGb = Prefs.DEFAULT_CACHE_MAX_GB,
         resultMode = RESULT_FAST,
@@ -350,7 +350,13 @@ object AddonConfig {
             append(
                 " · Results: ${if (s.isCompleteResults()) "complete" else "fast (default)"}",
             )
-            append(" · Debrid: ${s.debridServices.joinToString(", ")}")
+            append(
+                " · Debrid: " + if (s.debridServices.isEmpty()) {
+                    "none selected"
+                } else {
+                    s.debridServices.joinToString(", ")
+                },
+            )
             if (upstreamLabels.isEmpty()) {
                 append(" · Upstreams: not configured")
             } else {
@@ -387,7 +393,7 @@ object AddonConfig {
           Same Wi‑Fi as the TV. Leave blank if unused.
 
         debridServices
-          List only the services you use. Remove the ones you do not use:
+          Check only the services you use (default: none):
           AllDebrid, TorBox, RealDebrid, Premiumize, DebridLink, EasyDebrid, Offcloud, Putio
 
         streamQuality

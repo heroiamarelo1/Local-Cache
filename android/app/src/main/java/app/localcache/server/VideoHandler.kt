@@ -5,6 +5,7 @@ import android.util.Log
 import app.localcache.storage.CacheEntry
 import app.localcache.storage.CacheRegistry
 import app.localcache.storage.DownloadEngine
+import app.localcache.storage.PlaybackStatus
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Response
@@ -70,7 +71,8 @@ object VideoHandler {
         val hasRange = rangeHeader != null
 
         if (entry.filePath == null) {
-            Log.w(TAG, "no USB target for $cacheKey (${entry.lastError}) — streaming direct")
+            Log.w(TAG, "no cache target for $cacheKey (${entry.lastError}) — streaming direct")
+            PlaybackStatus.markStreaming(cacheKey, entry.lastError ?: "no cache folder")
             return proxyToClient(entry.url, parsed.start, requestEnd(parsed, totalBytes, 0), totalBytes, hasRange, type)
         }
 
@@ -87,7 +89,8 @@ object VideoHandler {
             if (end < parsed.start) {
                 return json(Status.RANGE_NOT_SATISFIABLE, """{"error":"Bad range"}""")
             }
-            Log.i(TAG, "serving $cacheKey from USB: ${parsed.start}-$end (on disk $onDisk)")
+            Log.i(TAG, "serving $cacheKey from storage: ${parsed.start}-$end (on disk $onDisk)")
+            PlaybackStatus.markLocal(cacheKey, "serving bytes $onDisk on disk")
             return serveProgressive(entry, parsed.start, end, totalBytes, hasRange, type)
         }
 
@@ -96,6 +99,7 @@ object VideoHandler {
         // Start on the debrid link and hand over to the drive once it catches up.
         val reason = entry.lastError ?: "download is at $onDisk"
         Log.i(TAG, "range ${parsed.start}- of $cacheKey not on disk ($reason) — starting on debrid")
+        PlaybackStatus.markStreaming(cacheKey, reason)
         return proxyToClient(
             entry.url,
             parsed.start,

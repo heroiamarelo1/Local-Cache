@@ -181,7 +181,7 @@ class UpstreamFetcher(private val context: Context) {
         return try {
             val request = Request.Builder()
                 .url(url)
-                .header("User-Agent", "LocalCache/0.4.16")
+                .header("User-Agent", "LocalCache/0.4.17")
                 .build()
             val call = client.newCall(request)
             calls[upstream.name] = call
@@ -271,7 +271,7 @@ class UpstreamFetcher(private val context: Context) {
     }
 
     fun clearCache() {
-        resultCache.clear()
+        clearAllCaches()
     }
 
     private data class CachedResult(val streams: List<StreamItem>, val storedAt: Long)
@@ -282,6 +282,11 @@ class UpstreamFetcher(private val context: Context) {
         private const val GRACE_AFTER_FIRST_MS = 900L
         private val resultCache = ConcurrentHashMap<String, CachedResult>()
         private val clients = ConcurrentHashMap<Long, OkHttpClient>()
+
+        /** Drop in-memory stream lists (e.g. after USB ↔ internal switch). */
+        fun clearAllCaches() {
+            resultCache.clear()
+        }
 
         private fun clientFor(timeoutS: Long): OkHttpClient =
             clients.getOrPut(timeoutS) {

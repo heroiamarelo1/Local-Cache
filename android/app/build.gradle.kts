@@ -13,8 +13,31 @@ android {
         applicationId = "app.localcache.release"
         minSdk = 24
         targetSdk = 34
-        versionCode = 56
-        versionName = "0.4.16"
+        versionCode = 63
+        versionName = "0.4.23"
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    flavorDimensions += "audience"
+    productFlavors {
+        create("standard") {
+            dimension = "audience"
+            isDefault = true
+            // Public: need at least 2 GB free for internal fallback.
+            buildConfigField("boolean", "ALLOW_TINY_INTERNAL", "false")
+            buildConfigField("long", "INTERNAL_MIN_FREE_BYTES", "${2L * 1024 * 1024 * 1024}L")
+        }
+        create("personal") {
+            dimension = "audience"
+            applicationIdSuffix = ".personal"
+            resValue("string", "app_name", "Local Cache Personal")
+            // Dev TV with little free space — skip the 2 GB gate.
+            buildConfigField("boolean", "ALLOW_TINY_INTERNAL", "true")
+            buildConfigField("long", "INTERNAL_MIN_FREE_BYTES", "0L")
+        }
     }
 
     buildTypes {

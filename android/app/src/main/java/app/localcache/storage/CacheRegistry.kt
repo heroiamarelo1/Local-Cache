@@ -76,6 +76,19 @@ object CacheRegistry {
         entry.status = "registered"
         entry.downloadedBytes = 0
         entry.lastError = null
+        entry.filePath = null
+    }
+
+    /** After storage mode changes, forget on-disk bindings so labels/progress match the new folder. */
+    fun clearStorageBindings() {
+        entries.values.forEach { entry ->
+            entry.status = "registered"
+            entry.downloadedBytes = 0
+            entry.totalBytes = 0
+            entry.filePath = null
+            entry.lastError = null
+            entry.bytesPerSec = 0
+        }
     }
 
     /**

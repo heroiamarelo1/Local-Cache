@@ -31,9 +31,9 @@ localCometManifestUrls  (array)
   Leave empty if unused. Independent of cometManifestUrls.
 
 debridServices
-  Used Debrid services (Remove the ones that you do not use):
+  Check only the debrid services you use (default: none):
   ["AllDebrid", "TorBox", "RealDebrid", "Premiumize", "DebridLink", "EasyDebrid", "Offcloud", "Putio"]
-  Only listed services are detected when ranking streams.
+  Only listed services are treated as cached when ranking streams.
 
 streamQuality
   "1080p"     — Recommended. Smaller files, safer on most USB sticks.

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import app.localcache.Prefs
 import java.io.File
+import java.util.Locale
 
 /**
  * Keeps the cache folder under a fixed size on the USB stick (default 120 GB of a 128 GB
@@ -46,7 +47,7 @@ object DiskQuota {
 
     fun usage(context: Context): Usage {
         val path = Prefs.cacheDirPath(context)
-            ?: return Usage(0, 0, "no USB folder chosen yet")
+            ?: return Usage(0, 0, "no cache folder chosen yet")
 
         val root = File(path)
         if (!root.exists()) return Usage(0, 0, "folder missing — USB unplugged or reformatted")
@@ -180,6 +181,7 @@ object DiskQuota {
         val quota = effectiveQuotaBytes(context)
         val usage = usage(context)
         val line = "%.1f / %d GB used, %d file%s".format(
+            Locale.US,
             usage.bytes.toDouble() / GB,
             quota / GB,
             usage.files,

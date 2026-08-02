@@ -2,6 +2,7 @@ package app.localcache
 
 import android.app.Application
 import android.util.Log
+import app.localcache.storage.StorageMode
 import app.localcache.storage.UsbDriveDetector
 import java.io.File
 
@@ -17,6 +18,19 @@ class LocalCacheApp : Application() {
      * otherwise the app reports an empty cache while movies are sitting on the stick.
      */
     private fun healCachePath() {
+        if (StorageMode.isInternal(this)) {
+            val internal = StorageMode.internalCacheDir(this)
+            if (!internal.isDirectory) internal.mkdirs()
+            if (Prefs.cacheDirPath(this) != internal.absolutePath) {
+                Prefs.setInternalSelection(
+                    this,
+                    internal.absolutePath,
+                    Prefs.cacheMaxGb(this),
+                )
+            }
+            return
+        }
+
         val saved = Prefs.cacheDirPath(this) ?: return
         if (File(saved).isDirectory) return
 

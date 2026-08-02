@@ -13,6 +13,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 object DownloadEngine {
@@ -46,6 +47,19 @@ object DownloadEngine {
     @Volatile
     private var appContext: Context? = null
 
+    /** Extra incomplete downloads to start after the current one finishes (settings resume). */
+    private val resumeQueue = ArrayDeque<String>()
+
+    data class Resumable(
+        val cacheKey: String,
+        val title: String,
+        val progress: Int,
+        val doneGb: String,
+        val totalGb: String,
+        val status: String,
+        val active: Boolean,
+    )
+
     private data class Target(val final: File, val part: File)
 
     /** One download attempt, so a cancelled run can tell itself apart from a failure. */
@@ -62,7 +76,7 @@ object DownloadEngine {
         }
     }
 
-    fun ensureStarted(context: Context, cacheKey: String) {
+    fun ensureStarted(context: Context, cacheKey: String, fromQueue: Boolean = false) {
         appContext = context.applicationContext
         val entry = CacheRegistry.get(cacheKey) ?: return
         val target = resolveTarget(context, entry) ?: return
@@ -82,6 +96,8 @@ object DownloadEngine {
         val ctx = context.applicationContext
 
         synchronized(lock) {
+            if (!fromQueue) resumeQueue.clear()
+
             if (activeKeyValue == cacheKey && activeJob?.isActive == true) return
 
             // Newest request has priority — park whatever was running.
@@ -117,16 +133,136 @@ object DownloadEngine {
 
                     download(entry, target, budget, run)
                 } finally {
-                    synchronized(lock) {
+                    val finishedOk = synchronized(lock) {
                         if (activeRun === run) {
                             activeRun = null
                             activeJob = null
                             activeKeyValue = null
                         }
+                        !run.cancelled && entry.status == "complete"
+                    }
+                    if (finishedOk || (!run.cancelled && entry.status == "error")) {
+                        startNextQueued(ctx)
                     }
                 }
             }
         }
+    }
+
+    fun listResumable(context: Context): List<Resumable> {
+        LocalLibrary.rehydrate(context)
+        val active = activeKeyValue
+        return LocalLibrary.scan(context)
+            .filter { !it.complete && it.cacheKey.isNotBlank() && it.url.isNotBlank() }
+            .sortedByDescending { it.downloadedBytes }
+            .map { item ->
+                val entry = CacheRegistry.get(item.cacheKey)
+                val done = item.downloadedBytes
+                val total = maxOf(item.totalBytes, entry?.totalBytes ?: 0L)
+                val progress = when {
+                    total > 0 -> minOf(99, ((done * 100) / total).toInt())
+                    done > 0 -> CacheRegistry.progress(item.cacheKey).coerceAtLeast(1)
+                    else -> 0
+                }
+                val status = when {
+                    item.cacheKey == active -> "downloading"
+                    entry?.status == "paused" -> "paused"
+                    entry?.status == "error" -> "error"
+                    else -> "incomplete"
+                }
+                Resumable(
+                    cacheKey = item.cacheKey,
+                    title = item.rawName.replace('\n', ' ').trim().let {
+                        if (it.length > 80) it.take(77) + "…" else it
+                    },
+                    progress = progress,
+                    doneGb = gb(done),
+                    totalGb = if (total > 0) gb(total) else "?",
+                    status = status,
+                    active = item.cacheKey == active,
+                )
+            }
+    }
+
+    /** Resume one or more paused/incomplete downloads (queued, one at a time). */
+    fun resumeSelected(context: Context, cacheKeys: List<String>): String {
+        val keys = cacheKeys.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (keys.isEmpty()) return "No downloads selected."
+
+        LocalLibrary.rehydrate(context)
+        val ready = keys.filter { key ->
+            val entry = CacheRegistry.get(key)
+            if (entry == null || entry.url.isBlank()) return@filter false
+            val target = resolveTarget(context, entry) ?: return@filter false
+            !target.final.exists() && (target.part.exists() || entry.downloadedBytes > 0 || true)
+        }
+        if (ready.isEmpty()) return "None of the selected files can be resumed."
+
+        synchronized(lock) {
+            resumeQueue.clear()
+            ready.drop(1).forEach { resumeQueue.addLast(it) }
+            ready.drop(1).forEach { key ->
+                CacheRegistry.get(key)?.let { entry ->
+                    if (entry.status != "downloading") {
+                        entry.status = "queued"
+                        entry.lastError = "queued — waiting to resume"
+                    }
+                }
+            }
+        }
+        ensureStarted(context, ready.first(), fromQueue = true)
+        val queued = ready.size - 1
+        return if (queued > 0) {
+            "Resumed 1 download, $queued queued after it."
+        } else {
+            "Resumed download."
+        }
+    }
+
+    /** Cancel selected incomplete downloads and delete their .part files. */
+    fun cancelSelected(context: Context, cacheKeys: List<String>): String {
+        val keys = cacheKeys.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (keys.isEmpty()) return "No downloads selected."
+
+        var cancelled = 0
+        var deleted = 0
+        val stoppedActive = synchronized(lock) {
+            resumeQueue.removeAll(keys.toSet())
+            val active = activeKeyValue
+            if (active != null && active in keys) {
+                stopActiveLocked("cancelled from /settings", deletePartial = true)
+                cancelled++
+                deleted++
+                active
+            } else {
+                null
+            }
+        }
+
+        keys.forEach { key ->
+            if (key == stoppedActive) return@forEach
+            val entry = CacheRegistry.get(key)
+            val path = entry?.filePath
+                ?: CachePaths.finalFile(context, key, entry?.url.orEmpty())?.absolutePath
+            if (path != null) {
+                val part = CachePaths.partFile(File(path))
+                if (part.exists() && part.delete()) deleted++
+                LocalLibrary.deleteMeta(File(path))
+            }
+            entry?.status = "cancelled"
+            entry?.downloadedBytes = 0
+            entry?.bytesPerSec = 0
+            entry?.lastError = "cancelled from /settings"
+            cancelled++
+        }
+
+        return "Cancelled $cancelled download(s), removed $deleted partial file(s)."
+    }
+
+    private fun startNextQueued(context: Context) {
+        val next = synchronized(lock) { resumeQueue.removeFirstOrNull() } ?: return
+        Log.i(TAG, "queue: starting $next")
+        ensureStarted(context, next, fromQueue = true)
     }
 
     /**
@@ -209,14 +345,14 @@ object DownloadEngine {
     /** Also fills in [CacheEntry.filePath] so progress can be read back from disk. */
     private fun resolveTarget(context: Context, entry: CacheEntry): Target? {
         val cacheRoot = Prefs.cacheDirPath(context)?.let { File(it) } ?: run {
-            Log.e(TAG, "no cache dir - pick a USB drive in the app first")
-            entry.lastError = "USB not selected in Local Cache app"
+            Log.e(TAG, "no cache dir - pick USB or internal storage first")
+            entry.lastError = "No cache folder selected in Local Cache app"
             return null
         }
 
         if (!cacheRoot.exists() && !cacheRoot.mkdirs()) {
             Log.e(TAG, "cannot create $cacheRoot")
-            entry.lastError = "Cannot create folder on USB: $cacheRoot"
+            entry.lastError = "Cannot create cache folder: $cacheRoot"
             return null
         }
 
@@ -233,7 +369,7 @@ object DownloadEngine {
         try {
             val builder = Request.Builder()
                 .url(entry.url)
-                .header("User-Agent", "LocalCache-TV/0.1.8")
+                .header("User-Agent", "LocalCache/0.4.17")
             if (downloaded > 0) {
                 builder.header("Range", "bytes=$downloaded-")
                 Log.i(TAG, "resume ${entry.cacheKey} from $downloaded")
@@ -325,7 +461,7 @@ object DownloadEngine {
                 }
 
                 if (!partFile.renameTo(target.final)) {
-                    throw IllegalStateException("Could not rename .part on USB")
+                    throw IllegalStateException("Could not rename .part on cache storage")
                 }
 
                 entry.status = "complete"
@@ -361,8 +497,15 @@ object DownloadEngine {
 
     /** Short line for the ongoing notification and the app screen. */
     fun statusLine(): String {
-        val key = activeKeyValue ?: return "Idle - ready for Stremio"
-        val entry = CacheRegistry.get(key) ?: return "Downloading…"
+        val parts = statusParts() ?: return "Idle — ready for Stremio"
+        return "${parts.title} · ${parts.stats}"
+    }
+
+    data class StatusParts(val title: String, val stats: String)
+
+    fun statusParts(): StatusParts? {
+        val key = activeKeyValue ?: return null
+        val entry = CacheRegistry.get(key) ?: return StatusParts("Downloading…", "")
         val done = entry.downloadedBytes
         val total = entry.totalBytes
         val speed = if (entry.bytesPerSec > 0) " @ ${speedText(entry.bytesPerSec)}" else ""
@@ -375,26 +518,24 @@ object DownloadEngine {
         val progress = CacheRegistry.progress(key)
         val state = when (entry.status) {
             "paused" -> "paused — tap stream in Stremio to resume"
-            "complete" -> "ready on USB"
+            "complete" -> "ready on storage"
             "downloading" -> "downloading"
             else -> entry.status
         }
-        return buildString {
-            appendLine(shortName)
-            if (total > 0) {
-                append("$progress% · ${gb(done)} / ${gb(total)} GB$speed · $state")
-            } else {
-                append("${gb(done)} GB$speed · $state")
-            }
+        val stats = if (total > 0) {
+            "$progress% · ${gb(done)} / ${gb(total)} GB$speed · $state"
+        } else {
+            "${gb(done)} GB$speed · $state"
         }
+        return StatusParts(shortName, stats)
     }
 
     /** MB/s plus Mbps, since stream bitrates are quoted in Mbps. */
     fun speedText(bytesPerSec: Long): String =
-        "%.1f MB/s (%.0f Mbps)".format(bytesPerSec / 1_048_576.0, bytesPerSec * 8.0 / 1_000_000)
+        "%.1f MB/s (%.0f Mbps)".format(Locale.US, bytesPerSec / 1_048_576.0, bytesPerSec * 8.0 / 1_000_000)
 
     fun activeSpeedBytesPerSec(): Long =
         activeKeyValue?.let { CacheRegistry.get(it)?.bytesPerSec } ?: 0
 
-    private fun gb(bytes: Long): String = "%.2f".format(bytes / 1_073_741_824.0)
+    private fun gb(bytes: Long): String = "%.2f".format(Locale.US, bytes / 1_073_741_824.0)
 }

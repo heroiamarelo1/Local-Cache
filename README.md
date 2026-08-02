@@ -2,17 +2,17 @@
 
 ![Local Cache banner](docs/local-cache-banner.png)
 
-**Watch now. Save it to the USB. Watch without buffering.**
+**Watch now. Save it locally. Watch without buffering.**
 
 Local Cache is a tiny Android TV app that runs a Stremio add-on *on your TV*.  
-You pick a stream like usual (Torrentio / Comet). **You can start watching while it downloads** — no waiting for the whole file. While you chill, it copies the movie to a USB stick and plays from it.
+You pick a stream like usual (Torrentio / Comet). **You can start watching while it downloads** — no waiting for the whole file. While you chill, it copies the movie to a USB stick (recommended) or internal storage and plays from it.
 
 ### ✨ The big win
 
 **No more buffering mid-movie.**  
-Once it’s on the USB, your TV isn’t fighting your internet anymore. Smooth local playback. That’s the whole point.
+Once the file is local, your TV isn’t fighting your internet anymore. Smooth playback. That’s the whole point.
 
-**Latest APK:** [v0.4.16](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.4.16)
+**Latest APK:** [v0.4.23](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.4.23)
 
 ---
 
@@ -35,10 +35,11 @@ If the file is already on USB, your TV doesn’t care what the cloud is doing to
 
 - 📺 Stremio add-on living on the TV (`http://127.0.0.1:7100/manifest.json`)
 - ▶️ **Play while downloading** — don’t wait for 100%
-- 🧠 Smart picks — prefers cached debrid links, 1080p or 4K+sound mode
+- 💾 **USB recommended**, or **internal storage** fallback (quality compromises — TV storage is limited)
+- 🧠 Smart picks — prefers cached debrid links, 1080p or 4K+sound mode; on internal storage, prefers a stream that **fits free space**
 - 🔗 Multiple Torrentio / Comet URLs (Torrentio = one debrid per link → add two for AD + TorBox)
-- 📱 Setup from your phone on the same Wi‑Fi — tap **+** to add more manifests
-- 📊 Download progress right in the app
+- 📱 Setup from your phone on the same Wi‑Fi — `/settings` for manifests, debrid filters, storage, resume/cancel downloads
+- 📊 Live download / playback status in the app and on `/settings`
 
 ---
 
@@ -46,7 +47,7 @@ If the file is already on USB, your TV doesn’t care what the cloud is doing to
 
 - Android TV / Google TV
 - [Stremio](https://www.stremio.com/) (or something compatible)
-- A USB drive formatted **exFAT** (FAT32 chokes on big movie files)
+- A USB drive formatted **exFAT** (recommended) — or enough free internal space (app suggests ~80% of free space; needs ≥2 GB free for internal mode)
 - Your Torrentio / Comet links  
   👉 Debrid accounts: **recommended, not mandatory**
 
@@ -55,10 +56,10 @@ If the file is already on USB, your TV doesn’t care what the cloud is doing to
 ## How it works? 🚀
 
 1. 📦 **Sideload the app** on your Android TV / Google TV ([Releases](https://github.com/heroiamarelo1/Local-Cache/releases))
-2. ▶️ **Start the server** in Local Cache (and pick your USB)
-3. 📱 **Configure on your phone** — same Wi‑Fi, open `TV_IP:7100/settings` (it’s written in the app), paste Torrentio / Comet manifests
+2. ▶️ **Start the server** in Local Cache — pick USB, or use internal storage if you must
+3. 📱 **Configure on your phone** — same Wi‑Fi, open `TV_IP:7100/settings` (it’s written in the app), paste Torrentio / Comet manifests, check only the debrid services you use
 4. 🎬 **Add the add-on in Stremio** → `http://127.0.0.1:7100/manifest.json`
-5. 🍿 **Pick a stream** — watch while it saves to USB
+5. 🍿 **Pick a stream** — watch while it saves locally
 
 ---
 
@@ -69,7 +70,7 @@ cd android
 ./gradlew :app:assembleDebug
 ```
 
-APK lands at: `android/app/build/outputs/apk/debug/app-debug.apk`  
+Release APK: `./gradlew :app:assembleStandardRelease`  
 Package id: `app.localcache.release`
 
 ---

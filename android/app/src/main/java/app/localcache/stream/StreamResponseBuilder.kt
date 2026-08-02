@@ -31,7 +31,7 @@ object StreamResponseBuilder {
                     "description",
                     "Configure add-on first\n" +
                         "Add your Torrentio and Comet manifest.json URLs " +
-                        "(USB config, Edit config on TV, or phone /settings).",
+                        "(phone /settings or Edit config on TV).",
                 )
                 .put("externalUrl", "http://$lanHost:$port/settings"),
         )
@@ -47,6 +47,7 @@ object StreamResponseBuilder {
         videoHost: String = lanHost,
         enabledDebrid: List<String> = AddonConfig.ALL_DEBRID_SERVICES,
         configured: Boolean = true,
+        storageLabel: String = "USB",
     ): String {
         val picks = build.picks
         val streams = JSONArray()
@@ -54,7 +55,7 @@ object StreamResponseBuilder {
         if (picks.isEmpty()) {
             val description = when {
                 !configured ->
-                    "Configure Torrentio/Comet manifest URLs first (USB config or /settings)."
+                    "Configure Torrentio/Comet manifest URLs first (/settings)."
                 build.rawCount == 0 ->
                     "Comet/Torrentio returned nothing. Check internet on the TV and open /health or /test."
                 build.strictCount == 0 ->
@@ -70,6 +71,19 @@ object StreamResponseBuilder {
             )
         } else {
             picks.forEach { pick ->
+                if (pick.slot == "fits_none") {
+                    streams.put(
+                        JSONObject()
+                            .put("name", "💾 ❌ Local Cache")
+                            .put(
+                                "description",
+                                "There is no option for Local Cache because of the filesize",
+                            )
+                            .put("externalUrl", "http://$lanHost:$port/settings"),
+                    )
+                    return@forEach
+                }
+
                 val progress = progressOf(pick.stream.cacheKey)
                 val status = statusOf(pick.stream.cacheKey)
                 val name = StreamLabelFormatter.streamName(
@@ -77,12 +91,16 @@ object StreamResponseBuilder {
                     progress,
                     status,
                     enabledDebrid,
+                    slot = pick.slot,
+                    storageLabel = storageLabel,
                 )
                 val description = StreamLabelFormatter.streamDescription(
                     pick.stream,
                     progress,
                     status,
                     enabledDebrid,
+                    slot = pick.slot,
+                    storageLabel = storageLabel,
                 )
                 val videoUrl =
                     "http://$videoHost:$port/video/${encodePathSegment(pick.stream.cacheKey)}"

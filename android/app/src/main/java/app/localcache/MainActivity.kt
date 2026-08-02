@@ -19,6 +19,7 @@ import app.localcache.server.RequestLog
 import app.localcache.server.ServerManager
 import app.localcache.storage.DiskQuota
 import app.localcache.storage.DownloadEngine
+import app.localcache.storage.StorageMode
 import app.localcache.storage.UsbDriveDetector
 import java.io.File
 import java.io.IOException
@@ -80,8 +81,8 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnStart).setOnClickListener {
             refreshLanIp(showDialogIfMultiple = false)
-            if (Prefs.cacheDirPath(this) == null) {
-                statusText.text = "Choose a USB drive first"
+            if (!StorageMode.isReady(this)) {
+                statusText.text = "Choose USB or internal storage first"
                 promptUsbSelection(force = true)
                 return@setOnClickListener
             }
@@ -253,21 +254,26 @@ class MainActivity : AppCompatActivity() {
         val usb = Prefs.usbLabel(this)
         val cache = Prefs.cacheDirPath(this)
         usbText.text = buildString {
-            if (usb != null && cache != null) {
-                appendLine("USB: $usb")
+            if (cache != null) {
+                if (StorageMode.isInternal(this@MainActivity)) {
+                    appendLine("Storage: INTERNAL (fallback)")
+                    appendLine(StorageMode.LIMITATIONS)
+                } else {
+                    appendLine("Storage: USB — ${usb ?: "?"}")
+                    Prefs.usbRootPath(this@MainActivity)?.let { appendLine("USB root: $it") }
+                }
                 appendLine("Movies save to:")
                 appendLine(cache)
-                appendLine("Config file on USB root: ${AddonConfig.CONFIG_FILE_NAME}")
-                Prefs.usbRootPath(this@MainActivity)?.let { appendLine("USB root: $it") }
+                appendLine("Config: prefs + ${AddonConfig.CONFIG_FILE_NAME} next to movies")
                 appendLine("Space: ${DiskQuota.summary(this@MainActivity)}")
                 if (!File(cache).isDirectory) {
-                    appendLine("This folder no longer exists — tap Choose USB drive")
+                    appendLine("This folder no longer exists — tap Choose storage")
                 }
                 appendLine()
                 appendLine("Download:")
                 append(DownloadEngine.statusLine())
             } else {
-                append("USB: not selected — tap Choose USB")
+                append("Storage: not selected — tap Choose storage (USB or internal)")
             }
         }
     }
@@ -392,7 +398,7 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("Delete every cached movie?")
             .setMessage(
-                "%d file%s using %.1f GB will be removed from the USB drive. This cannot be undone."
+                "%d file%s using %.1f GB will be removed from cache storage. This cannot be undone."
                     .format(usage.files, if (usage.files == 1) "" else "s", gb),
             )
             .setPositiveButton("Delete everything") { _, _ ->
@@ -438,12 +444,17 @@ class MainActivity : AppCompatActivity() {
 
         when {
             drives.isEmpty() -> {
-                statusText.text = "No USB drive detected — plug in a pendrive"
-                if (force) {
+                statusText.text = "No USB drive detected"
+                if (force || Prefs.cacheDirPath(this) == null) {
                     AlertDialog.Builder(this)
-                        .setTitle("No USB found")
-                        .setMessage("Plug a USB drive into the TV, then tap Choose USB again.")
-                        .setPositiveButton("OK", null)
+                        .setTitle("Choose storage")
+                        .setMessage(
+                            "No USB found.\n\n" +
+                                "USB is recommended. Internal storage is a fallback.\n\n" +
+                                StorageMode.LIMITATIONS,
+                        )
+                        .setPositiveButton("Use internal storage") { _, _ -> tryEnableInternal() }
+                        .setNegativeButton("Cancel", null)
                         .show()
                 }
             }
@@ -451,6 +462,17 @@ class MainActivity : AppCompatActivity() {
             drives.size == 1 -> confirmSingleDrive(drives.first())
             else -> showDrivePicker(drives)
         }
+    }
+
+    private fun tryEnableInternal() {
+        val result = StorageMode.enableInternal(this)
+        statusText.text = result.message
+        AlertDialog.Builder(this)
+            .setTitle(if (result.ok) "Internal storage" else "Cannot use internal storage")
+            .setMessage(result.message)
+            .setPositiveButton("OK", null)
+            .show()
+        refreshUi()
     }
 
     private fun confirmSingleDrive(drive: UsbVolume) {
@@ -462,9 +484,11 @@ class MainActivity : AppCompatActivity() {
                 "${drive.label}\n${drive.path}\nFilesystem: $fs\n\n" +
                     "Movies → ${cacheDir.absolutePath}\n" +
                     "Config → ${AddonConfig.CONFIG_FILE_NAME} on the USB " +
-                    "(USB root if your PC can write it; otherwise next to the movies folder)",
+                    "(USB root if your PC can write it; otherwise next to the movies folder)\n\n" +
+                    "Or use internal storage (fallback — lower quality, TV may struggle).",
             )
-            .setPositiveButton("Yes") { _, _ -> applyUsbChoice(drive) }
+            .setPositiveButton("Yes — USB") { _, _ -> applyUsbChoice(drive) }
+            .setNeutralButton("Use internal") { _, _ -> tryEnableInternal() }
             .setNegativeButton("Not now", null)
             .show()
     }
@@ -477,6 +501,7 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("Choose USB drive")
             .setItems(labels) { _, which -> applyUsbChoice(drives[which]) }
+            .setNeutralButton("Use internal") { _, _ -> tryEnableInternal() }
             .setNegativeButton("Cancel", null)
             .show()
     }
@@ -510,31 +535,28 @@ class MainActivity : AppCompatActivity() {
                         "1. Plug the drive into a PC\n" +
                         "2. Back up anything you need\n" +
                         "3. Format as exFAT\n" +
-                        "4. Plug it back into the TV and Choose USB again",
+                        "4. Plug it back into the TV and Choose storage again",
                 )
                 .setPositiveButton("OK", null)
-                .setNeutralButton("Use anyway") { _, _ -> saveUsbChoice(drive, cacheDir) }
+                .setNeutralButton("Use anyway") { _, _ -> saveUsbChoice(drive) }
                 .show()
             return
         }
 
-        saveUsbChoice(drive, cacheDir)
+        saveUsbChoice(drive)
     }
 
-    private fun saveUsbChoice(drive: UsbVolume, cacheDir: File) {
-        try {
-            Prefs.setUsbSelection(this, cacheDir.absolutePath, drive.label, drive.path)
-            val importMsg = AddonConfig.importFromUsb(this, File(drive.path), cacheDir)
-            statusText.text = "USB ready: ${drive.label}\n$importMsg"
-            refreshUi()
-        } catch (e: Exception) {
-            Log.e(TAG, "saveUsbChoice failed", e)
+    private fun saveUsbChoice(drive: UsbVolume) {
+        val result = StorageMode.selectUsb(this, drive.path)
+        statusText.text = result.message
+        if (!result.ok) {
             AlertDialog.Builder(this)
                 .setTitle("USB setup failed")
-                .setMessage(e.message ?: "Unknown error")
+                .setMessage(result.message)
                 .setPositiveButton("OK", null)
                 .show()
         }
+        refreshUi()
     }
 
     companion object {

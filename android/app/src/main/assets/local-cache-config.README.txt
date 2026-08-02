@@ -43,8 +43,8 @@ cacheMaxGb
   Maximum space for cached movies on the USB drive (default 100).
 
 resultMode
-  "fastest"  — ~1–3s for a debrid-cached hit; falls back to fast if none.
-  "fast"     — default. Answer sooner, fewer streams.
+  "fastest"  — default. ~1–3s for a debrid-cached hit; falls back to fast if none.
+  "fast"     — answer sooner, fewer streams.
   "complete" — wait for all upstreams, more streams.
 
 After editing the JSON on the USB stick, open Local Cache and tap

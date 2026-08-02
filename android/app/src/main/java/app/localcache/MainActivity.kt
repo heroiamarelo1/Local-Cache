@@ -394,7 +394,7 @@ class MainActivity : AppCompatActivity() {
             current.streamQuality,
         )
         val resultMode = field(
-            "resultMode: fastest (debrid required), fast (default), or complete",
+            "resultMode: fastest (default), fast, or complete",
             current.resultMode,
         )
         val cacheGb = field("cacheMaxGb", current.cacheMaxGb.toString()).apply {

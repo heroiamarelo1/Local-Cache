@@ -23,9 +23,9 @@ object AddonConfig {
     const val QUALITY_1080P = "1080p"
     const val QUALITY_4K_SOUND = "4k_sound"
 
-    /** Answer sooner: shorter wait, fewer streams. Default. */
+    /** Answer sooner: shorter wait, fewer streams. */
     const val RESULT_FAST = "fast"
-    /** Race upstreams; hard ~3s for a debrid-cached hit, else fall back to fast. */
+    /** Default. Race upstreams; hard ~3s for a debrid-cached hit, else fall back to fast. */
     const val RESULT_FASTEST = "fastest"
     /** Wait for all upstreams and return more streams. */
     const val RESULT_COMPLETE = "complete"
@@ -54,7 +54,7 @@ object AddonConfig {
         val debridServices: List<String>,
         val streamQuality: String,
         val cacheMaxGb: Int,
-        val resultMode: String = RESULT_FAST,
+        val resultMode: String = RESULT_FASTEST,
     ) {
         /** First Torrentio URL — for simple TV fields / legacy display. */
         val torrentioManifestUrl: String get() = torrentioManifestUrls.firstOrNull().orEmpty()
@@ -105,9 +105,9 @@ object AddonConfig {
     fun normalizeResultMode(mode: String?): String =
         when (mode?.trim()?.lowercase()) {
             RESULT_COMPLETE -> RESULT_COMPLETE
-            RESULT_FASTEST -> RESULT_FASTEST
-            RESULT_FAST, RESULT_RELIABLE, "", null -> RESULT_FAST
-            else -> RESULT_FAST
+            RESULT_FAST, RESULT_RELIABLE -> RESULT_FAST
+            RESULT_FASTEST, "", null -> RESULT_FASTEST
+            else -> RESULT_FASTEST
         }
 
     fun isManifestUrl(url: String?): Boolean {
@@ -207,7 +207,7 @@ object AddonConfig {
             debridServices = services,
             streamQuality = obj.optString("streamQuality", QUALITY_1080P),
             cacheMaxGb = obj.optInt("cacheMaxGb", Prefs.DEFAULT_CACHE_MAX_GB),
-            resultMode = normalizeResultMode(obj.optString("resultMode", RESULT_FAST)),
+            resultMode = normalizeResultMode(obj.optString("resultMode", RESULT_FASTEST)),
         )
     }
 
@@ -234,7 +234,7 @@ object AddonConfig {
         debridServices = emptyList(),
         streamQuality = QUALITY_1080P,
         cacheMaxGb = Prefs.DEFAULT_CACHE_MAX_GB,
-        resultMode = RESULT_FAST,
+        resultMode = RESULT_FASTEST,
     )
 
     /**
@@ -363,8 +363,8 @@ object AddonConfig {
             append(
                 " · Results: " + when {
                     s.isCompleteResults() -> "complete"
-                    s.isFastestResults() -> "fastest"
-                    else -> "fast (default)"
+                    s.isFastestResults() -> "fastest (default)"
+                    else -> "fast"
                 },
             )
             append(
@@ -421,7 +421,8 @@ object AddonConfig {
           Max space for cached movies on the USB (default 100).
 
         resultMode
-          "fast"     — default. Answer sooner, fewer streams.
+          "fastest"  — default. ~1–3s debrid-cached hit; falls back to fast.
+          "fast"     — answer sooner, fewer streams.
           "complete" — wait for all upstreams, more streams.
 
         After editing, Choose USB again in the app (or Save on /settings) to reload.

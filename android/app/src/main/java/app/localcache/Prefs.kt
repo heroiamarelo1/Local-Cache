@@ -99,7 +99,7 @@ object Prefs {
 
     fun resultMode(context: Context): String =
         AddonConfig.normalizeResultMode(
-            prefs(context).getString("result_mode", AddonConfig.RESULT_FAST),
+            prefs(context).getString("result_mode", AddonConfig.RESULT_FASTEST),
         )
 
     fun setResultMode(context: Context, mode: String) {

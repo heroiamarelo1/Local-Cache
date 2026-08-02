@@ -80,7 +80,7 @@ Or read `android/app/src/main/assets/local-cache-config.README.txt`.
 | `cometManifestUrls` | Optional public / ElfHosted Comet |
 | `localCometManifestUrls` | Optional Comet on your LAN |
 | `streamQuality` | `1080p` or `4k_sound` |
-| `resultMode` | `fastest` (debrid hit or fall back to fast), `fast` (default), or `complete` |
+| `resultMode` | `fastest` (default; debrid hit or fall back to fast), `fast`, or `complete` |
 | `debridServices` | Only the debrids you actually use |
 
 ---

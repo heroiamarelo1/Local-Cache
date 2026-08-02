@@ -76,7 +76,7 @@ object SettingsPage {
                     debridServices = selected,
                     streamQuality = first("streamQuality").ifBlank { AddonConfig.QUALITY_1080P },
                     cacheMaxGb = first("cacheMaxGb").toIntOrNull() ?: Prefs.DEFAULT_CACHE_MAX_GB,
-                    resultMode = first("resultMode").ifBlank { AddonConfig.RESULT_FAST },
+                    resultMode = first("resultMode").ifBlank { AddonConfig.RESULT_FASTEST },
                 )
                 if (BuildConfig.WUPLAY_MODE) {
                     Prefs.setPublicHost(context, first("publicHost").ifBlank { null })
@@ -303,8 +303,8 @@ object SettingsPage {
 
     <label>Result speed</label>
     <div class="box">
-      <label class="row"><input type="radio" name="resultMode" value="fastest" $mFastest> Fastest — ~1–3s for a debrid-cached stream (helps Stremio not skip Local Cache)</label>
-      <label class="row"><input type="radio" name="resultMode" value="fast" $mFast> Fast (default) — answer sooner, fewer streams</label>
+      <label class="row"><input type="radio" name="resultMode" value="fastest" $mFastest> Fastest (default) — ~1–3s for a debrid-cached stream (helps Stremio not skip Local Cache)</label>
+      <label class="row"><input type="radio" name="resultMode" value="fast" $mFast> Fast — answer sooner, fewer streams</label>
       <label class="row"><input type="radio" name="resultMode" value="complete" $mComplete> Complete — wait for all upstreams, more streams</label>
     </div>
     <p class="hint">Fastest prefers a debrid-cached hit quickly. If none is found in time, it falls back to Fast automatically.</p>

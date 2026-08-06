@@ -16,11 +16,15 @@ Once the file is local, your TV isn’t fighting your internet anymore. Smooth p
 
 ---
 
-## Debrid? ⚡
+## Debrid is required ⚡
 
-**A debrid service is recommended** (AllDebrid, TorBox, etc.) — faster starts, more “instant” links, happier evenings.
+**You need a debrid service** (AllDebrid, TorBox, Real-Debrid, etc.).
 
-**But it’s not required.** You can still use Local Cache without one; downloads may be slower and less reliable. Debrid just makes life easier.
+Local Cache only downloads **direct HTTP links**. Without debrid, Torrentio/Comet mostly return magnets — and this app is **not** a torrent client, so those won’t show as usable Local Cache streams.
+
+1. Configure Torrentio / Comet **with your debrid account** (get the final `manifest.json` URL)
+2. Paste that URL in Local Cache `/settings`
+3. Check the same debrid service(s) in the settings checkboxes
 
 ---
 
@@ -41,8 +45,7 @@ Once the file is local, your TV isn’t fighting your internet anymore. Smooth p
 - Android TV / Google TV
 - [Stremio](https://www.stremio.com/) (or something compatible)
 - A USB drive formatted **exFAT** (recommended) — or enough free internal space (app suggests ~80% of free space; needs ≥2 GB free for internal mode)
-- Your Torrentio / Comet links  
-  👉 Debrid accounts: **recommended, not mandatory**
+- Torrentio / Comet manifests configured **with a debrid account** (required)
 
 ---
 
@@ -50,7 +53,7 @@ Once the file is local, your TV isn’t fighting your internet anymore. Smooth p
 
 1. 📦 **Sideload the app** on your Android TV / Google TV ([Releases](https://github.com/heroiamarelo1/Local-Cache/releases))
 2. ▶️ **Start the server** in Local Cache — pick USB, or use internal storage if you must
-3. 📱 **Configure on your phone** — same Wi‑Fi, open `TV_IP:7100/settings` (it’s written in the app), paste Torrentio / Comet manifests, check only the debrid services you use
+3. 📱 **Configure on your phone** — same Wi‑Fi, open `TV_IP:7100/settings` (it’s written in the app), paste Torrentio / Comet manifests that include your debrid, then check those debrid services
 4. 🎬 **Add the add-on in Stremio** → `http://127.0.0.1:7100/manifest.json`
 5. 🍿 **Pick a stream** — watch while it saves locally
 

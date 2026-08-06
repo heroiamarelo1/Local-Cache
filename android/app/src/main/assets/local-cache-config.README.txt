@@ -31,8 +31,10 @@ localCometManifestUrls  (array)
   Leave empty if unused. Independent of cometManifestUrls.
 
 debridServices
+  REQUIRED: a debrid must be in your Torrentio/Comet manifest (HTTP links).
   Check only the debrid services you use (default: none):
   ["AllDebrid", "TorBox", "RealDebrid", "Premiumize", "DebridLink", "EasyDebrid", "Offcloud", "Putio"]
+  Local Cache is not a torrent client — magnets alone will not work.
   Only listed services are treated as cached when ranking streams.
 
 streamQuality

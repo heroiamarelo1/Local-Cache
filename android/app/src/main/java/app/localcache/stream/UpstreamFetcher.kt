@@ -334,7 +334,12 @@ class UpstreamFetcher(private val context: Context) {
         for (i in 0 until streams.length()) {
             val s = streams.getJSONObject(i)
             val playUrl = s.optString("url", "")
-            if (!playUrl.startsWith("http")) continue
+            // HTTP debrid only — never surface magnets / infoHash-only torrents in Stremio.
+            if (!playUrl.startsWith("http://", ignoreCase = true) &&
+                !playUrl.startsWith("https://", ignoreCase = true)
+            ) {
+                continue
+            }
 
             val rawName = s.optString("name", s.optString("title", "Stream"))
             val title = s.optString("title").takeIf { it.isNotBlank() }

@@ -125,7 +125,7 @@ object StreamLabelFormatter {
             cached ->
                 "⚡ Local Cache $res · Start download"
             else ->
-                "🧲 Local Cache $res · Start download"
+                "⬇️ Local Cache $res · Start download"
         }
     }
 
@@ -198,7 +198,7 @@ object StreamLabelFormatter {
         val t = line.trim()
         if (t.isEmpty()) return true
         // Torrentio stats: 👤 12 💾 15.2 GB ⚙️ …
-        if (Regex("""^[👤💾⚙️🚀⭐🧲⚡⬇️✅+].*""").matches(t) && t.length < 80) return true
+        if (Regex("""^[👤💾⚙️🚀⭐⚡⬇️✅+].*""").matches(t) && t.length < 80) return true
         if (Regex("""^[\d./\s]+(GB|MB)\b""", RegexOption.IGNORE_CASE).matches(t)) return true
         return false
     }

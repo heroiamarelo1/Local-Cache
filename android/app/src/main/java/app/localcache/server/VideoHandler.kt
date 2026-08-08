@@ -36,14 +36,23 @@ object VideoHandler {
     /** No more bytes are coming for these, so waiting on the file is pointless. */
     private val TERMINAL_STATUSES = setOf("error", "paused", "cancelled")
 
-    /** How often a proxied response looks to see whether the drive has caught up. */
-    private const val HANDOVER_CHECK_MS = 2_000L
+    /** How often hybrid playback re-checks local vs debrid. */
+    private const val HANDOVER_CHECK_MS = 1_500L
 
-    /** Cushion the download must hold over the playback point before handing over. */
-    private const val HANDOVER_MARGIN_BYTES = 32L * 1024 * 1024
+    /**
+     * Local must stay this far ahead of the playhead before we prefer the drive.
+     * Too small and we hand over then immediately stall when download dips.
+     */
+    private const val HANDOVER_MARGIN_BYTES = 64L * 1024 * 1024
+
+    /** If local is only this far ahead (or less), fall back to debrid. */
+    private const val FALLBACK_MARGIN_BYTES = 8L * 1024 * 1024
 
     /** How far past the written point still counts as "the downloader is nearly there". */
     private const val GROWING_GAP_BYTES = 8L * 1024 * 1024
+
+    private fun isHttpUrl(url: String): Boolean =
+        url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)
 
     fun serve(context: Context, session: IHTTPSession, cacheKey: String, headOnly: Boolean): Response {
         val entry = CacheRegistry.get(cacheKey)
@@ -79,36 +88,40 @@ object VideoHandler {
         val available = availableNow(entry)
         val onDisk = available?.size ?: 0L
         val haveStart = available != null && (available.complete || available.size > parsed.start)
+        val complete = entry.status == "complete" ||
+            (entry.filePath != null && File(entry.filePath!!).exists() && available?.complete == true)
 
-        // Never block before replying. Waiting here sends the player nothing at all — not
-        // even headers — and Stremio reads a silent socket as a dead stream and skips to the
-        // next result. Answer immediately; GrowingFileInputStream does any waiting, by which
-        // point the player is already receiving a response.
-        if (haveStart || arrivingShortly(entry, parsed.start, onDisk, totalBytes)) {
-            val end = requestEnd(parsed, totalBytes, onDisk)
-            if (end < parsed.start) {
-                return json(Status.RANGE_NOT_SATISFIABLE, """{"error":"Bad range"}""")
+        val end = requestEnd(parsed, totalBytes, onDisk)
+        if (end < parsed.start) {
+            return json(Status.RANGE_NOT_SATISFIABLE, """{"error":"Bad range"}""")
+        }
+
+        // Incomplete HTTP downloads: hybrid (local when safely ahead, else debrid).
+        // One-way handover used to stall when the .part file lost the race with playback.
+        if (!complete && isHttpUrl(entry.url)) {
+            val preferLocal = haveStart && onDisk > parsed.start + HANDOVER_MARGIN_BYTES
+            if (preferLocal) {
+                Log.i(TAG, "hybrid $cacheKey start local: ${parsed.start}-$end (on disk $onDisk)")
+                PlaybackStatus.markLocal(cacheKey, "serving bytes $onDisk on disk")
+            } else {
+                val reason = entry.lastError ?: "download is at $onDisk"
+                Log.i(TAG, "hybrid $cacheKey start debrid: ${parsed.start}- ($reason)")
+                PlaybackStatus.markStreaming(cacheKey, reason)
             }
+            return serveHybrid(entry, parsed.start, end, totalBytes, hasRange, type, startOnDisk = preferLocal)
+        }
+
+        // Complete (or nearly local) files: progressive from storage.
+        if (haveStart || arrivingShortly(entry, parsed.start, onDisk, totalBytes)) {
             Log.i(TAG, "serving $cacheKey from storage: ${parsed.start}-$end (on disk $onDisk)")
             PlaybackStatus.markLocal(cacheKey, "serving bytes $onDisk on disk")
             return serveProgressive(entry, parsed.start, end, totalBytes, hasRange, type)
         }
 
-        // Genuinely ahead of the download: the player reads the container index from the end
-        // of the file before it can start, and seeking jumps past what has been written.
-        // Start on the debrid link and hand over to the drive once it catches up.
         val reason = entry.lastError ?: "download is at $onDisk"
         Log.i(TAG, "range ${parsed.start}- of $cacheKey not on disk ($reason) — starting on debrid")
         PlaybackStatus.markStreaming(cacheKey, reason)
-        return proxyToClient(
-            entry.url,
-            parsed.start,
-            requestEnd(parsed, totalBytes, 0),
-            totalBytes,
-            hasRange,
-            type,
-            handoverEntry = entry,
-        )
+        return serveHybrid(entry, parsed.start, end, totalBytes, hasRange, type, startOnDisk = false)
     }
 
     /** Inclusive end byte we promise to deliver for this request. */
@@ -145,6 +158,28 @@ object VideoHandler {
         if (totalBytes <= 0) return false
         if (entry.status in TERMINAL_STATUSES) return false
         return start <= onDisk + GROWING_GAP_BYTES
+    }
+
+    private fun serveHybrid(
+        entry: CacheEntry,
+        start: Long,
+        end: Long,
+        totalBytes: Long,
+        hasRange: Boolean,
+        type: String,
+        startOnDisk: Boolean,
+    ): Response {
+        val length = end - start + 1
+        val status = if (hasRange) Status.PARTIAL_CONTENT else Status.OK
+        val body = HybridInputStream(entry, start, length, startOnDisk)
+        val response = NanoHTTPD.newFixedLengthResponse(status, type, body, length)
+        response.addHeader("Accept-Ranges", "bytes")
+        response.addHeader("Access-Control-Allow-Origin", "*")
+        if (hasRange) {
+            val total = if (totalBytes > 0) totalBytes.toString() else "*"
+            response.addHeader("Content-Range", "bytes $start-$end/$total")
+        }
+        return response
     }
 
     private fun serveProgressive(
@@ -297,21 +332,23 @@ object VideoHandler {
     }
 
     /**
-     * Starts on the debrid link and moves to the USB file part-way through, in the middle of
-     * one HTTP response. The player sees a single continuous stream and never reconnects, so
-     * a session that had to start on a flaky debrid link still ends up reading off the drive
-     * once the download overtakes the playback position.
+     * Two-way hybrid: prefer the growing local file when it is safely ahead of the playhead,
+     * otherwise read from the debrid URL. If local falls behind again after a handover,
+     * reopen debrid from the current byte offset (one-way handover used to stall here).
      */
-    private class HandoverInputStream(
+    private class HybridInputStream(
         private val entry: CacheEntry,
         startOffset: Long,
         length: Long,
-        private val upstream: InputStream,
+        startOnDisk: Boolean,
     ) : InputStream() {
         private var position = startOffset
         private var remaining = length
-        private var disk: GrowingFileInputStream? = null
-        private var nextCheckAt = System.currentTimeMillis() + HANDOVER_CHECK_MS
+        private var onDisk = startOnDisk
+        private var local: RandomAccessFile? = null
+        private var localPath: String? = null
+        private var upstream: InputStream? = null
+        private var nextCheckAt = 0L
         private var closed = false
 
         override fun read(): Int {
@@ -321,48 +358,123 @@ object VideoHandler {
 
         override fun read(buffer: ByteArray, offset: Int, count: Int): Int {
             if (closed || remaining <= 0) return -1
+            maybeSwitch()
 
-            disk?.let { return pull(it, buffer, offset, count) }
-
-            if (System.currentTimeMillis() >= nextCheckAt) {
-                nextCheckAt = System.currentTimeMillis() + HANDOVER_CHECK_MS
-                if (driveIsAhead()) {
-                    Log.i(TAG, "handover to USB at $position for ${entry.cacheKey}")
-                    runCatching { upstream.close() }
-                    val local = GrowingFileInputStream(entry, position, remaining)
-                    disk = local
-                    return pull(local, buffer, offset, count)
-                }
-            }
-
-            return pull(upstream, buffer, offset, count)
-        }
-
-        private fun pull(source: InputStream, buffer: ByteArray, offset: Int, count: Int): Int {
             val want = minOf(count.toLong(), remaining).toInt()
             if (want <= 0) return -1
-            val read = source.read(buffer, offset, want)
-            if (read <= 0) return -1
-            position += read
-            remaining -= read
-            return read
+
+            if (onDisk) {
+                val n = readLocal(buffer, offset, want)
+                if (n > 0) {
+                    position += n
+                    remaining -= n
+                    return n
+                }
+                // Local miss — fall back to debrid for this range.
+                Log.i(TAG, "hybrid fallback to debrid at $position for ${entry.cacheKey}")
+                PlaybackStatus.markStreaming(entry.cacheKey, "local fell behind at $position")
+                onDisk = false
+                closeLocal()
+                openUpstream()
+            }
+
+            val source = upstream ?: run {
+                openUpstream()
+                upstream
+            } ?: return -1
+            val n = source.read(buffer, offset, want)
+            if (n <= 0) return -1
+            position += n
+            remaining -= n
+            return n
         }
 
-        /**
-         * Only switch once the drive is comfortably ahead — handing over to a file that is
-         * barely at the playback point would just stall waiting for the downloader.
-         */
-        private fun driveIsAhead(): Boolean {
-            val path = entry.filePath ?: return false
-            if (File(path).exists()) return true
+        private fun maybeSwitch() {
+            val now = System.currentTimeMillis()
+            if (now < nextCheckAt) return
+            nextCheckAt = now + HANDOVER_CHECK_MS
+            val ahead = localAhead()
+            if (onDisk) {
+                if (ahead < FALLBACK_MARGIN_BYTES && entry.status != "complete") {
+                    Log.i(TAG, "hybrid cushion low at $position for ${entry.cacheKey} (ahead=$ahead)")
+                    PlaybackStatus.markStreaming(entry.cacheKey, "local cushion low at $position")
+                    onDisk = false
+                    closeLocal()
+                    openUpstream()
+                }
+            } else if (ahead >= HANDOVER_MARGIN_BYTES || entry.status == "complete") {
+                Log.i(TAG, "hybrid handover to USB at $position for ${entry.cacheKey} (ahead=$ahead)")
+                PlaybackStatus.markLocal(entry.cacheKey, "serving bytes ${position + ahead} on disk")
+                closeUpstream()
+                onDisk = true
+            }
+        }
+
+        private fun localAhead(): Long {
+            val file = currentLocalFile() ?: return -1L
+            return file.length() - position
+        }
+
+        private fun currentLocalFile(): File? {
+            val path = entry.filePath ?: return null
+            val final = File(path)
+            if (final.exists()) return final
             val part = File("$path.part")
-            return part.exists() && part.length() > position + HANDOVER_MARGIN_BYTES
+            return if (part.exists()) part else null
+        }
+
+        private fun readLocal(buffer: ByteArray, offset: Int, count: Int): Int {
+            val file = currentLocalFile() ?: return -1
+            if (file.length() <= position) return -1
+            val raf = openLocal(file) ?: return -1
+            val want = minOf(count.toLong(), file.length() - position).toInt()
+            if (want <= 0) return -1
+            return try {
+                raf.seek(position)
+                raf.read(buffer, offset, want)
+            } catch (e: Exception) {
+                Log.w(TAG, "hybrid local read failed: ${e.message}")
+                -1
+            }
+        }
+
+        private fun openLocal(file: File): RandomAccessFile? {
+            if (localPath != file.absolutePath) {
+                closeLocal()
+                local = runCatching { RandomAccessFile(file, "r") }.getOrNull()
+                localPath = if (local != null) file.absolutePath else null
+            }
+            return local
+        }
+
+        private fun openUpstream() {
+            if (upstream != null) return
+            if (!isHttpUrl(entry.url)) return
+            try {
+                val end = if (remaining > 0) position + remaining - 1 else -1L
+                val proxy = UpstreamProxy.openRangeSync(entry.url, position, end, entry.totalBytes)
+                upstream = proxy.body.byteStream()
+            } catch (e: Exception) {
+                Log.e(TAG, "hybrid upstream open failed: ${e.message}")
+                upstream = null
+            }
+        }
+
+        private fun closeLocal() {
+            runCatching { local?.close() }
+            local = null
+            localPath = null
+        }
+
+        private fun closeUpstream() {
+            runCatching { upstream?.close() }
+            upstream = null
         }
 
         override fun close() {
             closed = true
-            runCatching { upstream.close() }
-            runCatching { disk?.close() }
+            closeLocal()
+            closeUpstream()
         }
     }
 
@@ -383,11 +495,7 @@ object VideoHandler {
         return entry.totalBytes
     }
 
-    /**
-     * Used when the drive cannot cover the request yet. The response is not locked to the
-     * debrid link for its whole life: [handoverEntry] lets it move onto the USB file
-     * mid-stream, without the player noticing, as soon as the download gets ahead.
-     */
+    /** Direct proxy when there is no cache folder at all. */
     private fun proxyToClient(
         url: String,
         start: Long,
@@ -395,7 +503,6 @@ object VideoHandler {
         totalBytes: Long,
         hasRange: Boolean,
         type: String,
-        handoverEntry: CacheEntry? = null,
     ): Response {
         val proxy = try {
             UpstreamProxy.openRangeSync(url, start, end, totalBytes)
@@ -409,18 +516,19 @@ object VideoHandler {
 
         val chunkSize = proxy.responseEnd - proxy.responseStart + 1
         val status = if (hasRange) Status.PARTIAL_CONTENT else Status.OK
-
-        val body = if (handoverEntry != null) {
-            HandoverInputStream(handoverEntry, proxy.responseStart, chunkSize, proxy.body.byteStream())
-        } else {
-            proxy.body.byteStream()
-        }
-
-        val response = NanoHTTPD.newFixedLengthResponse(status, type, body, chunkSize)
+        val response = NanoHTTPD.newFixedLengthResponse(
+            status,
+            type,
+            proxy.body.byteStream(),
+            chunkSize,
+        )
         response.addHeader("Accept-Ranges", "bytes")
         response.addHeader("Access-Control-Allow-Origin", "*")
         if (hasRange) {
-            response.addHeader("Content-Range", "bytes ${proxy.responseStart}-${proxy.responseEnd}/${proxy.total}")
+            response.addHeader(
+                "Content-Range",
+                "bytes ${proxy.responseStart}-${proxy.responseEnd}/${proxy.total}",
+            )
         } else if (proxy.total > 0) {
             response.addHeader("Content-Length", proxy.total.toString())
         }

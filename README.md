@@ -12,7 +12,7 @@ You pick a stream like usual (Torrentio / Comet). **You can start watching while
 **No more buffering mid-movie.**  
 Once the file is local, your TV isn’t fighting your internet anymore. Smooth playback. That’s the whole point.
 
-**Latest APK:** [v0.4.24](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.4.24)
+**Latest APK:** [v0.4.25](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.4.25)
 
 ---
 
@@ -66,9 +66,10 @@ cd android
 ./gradlew :app:assembleDebug
 ```
 
-Stremio APK: `./gradlew :app:assembleStandardRelease` — package `app.localcache.release` (port **7100**, install `http://127.0.0.1:7100/manifest.json`)
+Release APK: `./gradlew :app:assembleStandardRelease` — package `app.localcache.release` (port **7100**).
 
-WuPlay APK: `./gradlew :app:assembleWuplayRelease` — package `app.localcache.wuplay` (port **7001**, public IP + router forward for `config.wuplay.app`)
+- **Stremio on the TV:** install `http://127.0.0.1:7100/manifest.json`
+- **WuPlay (local add-on):** use the TV’s LAN IP, e.g. `http://192.168.x.x:7100/manifest.json` (same Wi‑Fi; no separate WuPlay APK)
 
 ---
 

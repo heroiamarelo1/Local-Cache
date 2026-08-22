@@ -122,6 +122,10 @@ object StreamLabelFormatter {
                 "⬇️ Local Cache $res · $progress% paused — tap to play/resume"
             progress > 0 ->
                 "⬇️ Local Cache $res · $progress% on $storageLabel"
+            // 🧲 means a real magnet here, not an uncached debrid link — the viewer should be
+            // able to tell peer-to-peer rows apart before pressing play on one.
+            stream.isTorrent ->
+                "🧲 Local Cache $res · Start torrent"
             cached ->
                 "⚡ Local Cache $res · Start download"
             else ->
@@ -137,7 +141,11 @@ object StreamLabelFormatter {
         slot: String? = null,
         storageLabel: String = "USB",
     ): String {
-        val mark = DebridRules.displayCacheMark(stream, enabledDebrid)
+        val mark = if (stream.isTorrent) {
+            stream.seeders?.let { "🧲 $it seeders" } ?: "🧲 torrent"
+        } else {
+            DebridRules.displayCacheMark(stream, enabledDebrid)
+        }
         val size = sizeLabel(stream)
         val source = stream.source.takeIf { it.isNotBlank() }
         val head = listOfNotNull(mark, size).joinToString(" ")
@@ -198,7 +206,7 @@ object StreamLabelFormatter {
         val t = line.trim()
         if (t.isEmpty()) return true
         // Torrentio stats: 👤 12 💾 15.2 GB ⚙️ …
-        if (Regex("""^[👤💾⚙️🚀⭐⚡⬇️✅+].*""").matches(t) && t.length < 80) return true
+        if (Regex("""^[👤💾⚙️🚀⭐🧲⚡⬇️✅+].*""").matches(t) && t.length < 80) return true
         if (Regex("""^[\d./\s]+(GB|MB)\b""", RegexOption.IGNORE_CASE).matches(t)) return true
         return false
     }

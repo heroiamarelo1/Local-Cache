@@ -3,6 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val libtorrent4jVersion = "2.1.0-39"
+
 android {
     namespace = "app.localcache"
     compileSdk = 34
@@ -12,13 +14,19 @@ android {
         applicationId = "app.localcache.release"
         minSdk = 24
         targetSdk = 34
-        versionCode = 69
-        versionName = "0.4.28"
+        versionCode = 70
+        versionName = "0.5.0"
         buildConfigField("boolean", "WUPLAY_MODE", "false")
         buildConfigField("String", "PREFS_FILE", "\"local_cache_release\"")
         buildConfigField("int", "DEFAULT_PORT", "7100")
         buildConfigField("String", "CLIENT_NAME", "\"Stremio\"")
         buildConfigField("String", "ADDON_ID", "\"org.localcache.release\"")
+
+        // Android TV boxes are arm only. Skipping x86 keeps the torrent engine
+        // from tripling the APK for architectures nobody installs this on.
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+        }
     }
 
     buildFeatures {
@@ -79,6 +87,12 @@ android {
                 "META-INF/DEPENDENCIES",
             )
         }
+        jniLibs {
+            // libtorrent is ~30 MB of uncompressed .so. This app is sideloaded from a GitHub
+            // release onto a TV, so download size matters far more than the extra copy the
+            // installer leaves on internal storage.
+            useLegacyPackaging = true
+        }
     }
 }
 
@@ -88,4 +102,9 @@ dependencies {
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // BitTorrent fallback for magnet streams (libtorrent 2.x via JNI).
+    implementation("org.libtorrent4j:libtorrent4j:$libtorrent4jVersion")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm64:$libtorrent4jVersion")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm:$libtorrent4jVersion")
 }

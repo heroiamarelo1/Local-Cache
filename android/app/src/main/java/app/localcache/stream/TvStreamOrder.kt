@@ -62,8 +62,8 @@ object TvStreamOrder {
             }
         }
 
-        val tvRanked = TvStreamRank.rank(tvPool, enabledDebrid, quality)
-        val pcRanked = PcStreamRank.rank(playable)
+        val tvRanked = debridFirst(TvStreamRank.rank(tvPool, enabledDebrid, quality))
+        val pcRanked = debridFirst(PcStreamRank.rank(playable))
         val pcCached = pcRanked.filter { DebridRules.isDebridCached(it, enabledDebrid) }
         val tvCached = tvRanked.filter { DebridRules.isDebridCached(it, enabledDebrid) }
         val usingUncachedFallback = tvCached.isEmpty() && tvRanked.isNotEmpty()
@@ -89,7 +89,8 @@ object TvStreamOrder {
                     !seen.contains(it.cacheKey)
             }
             .sortedWith(
-                compareByDescending<StreamItem> { if (DebridRules.isDebridCached(it, enabledDebrid)) 1 else 0 }
+                torrentsLast
+                    .thenByDescending { if (DebridRules.isDebridCached(it, enabledDebrid)) 1 else 0 }
                     .thenByDescending {
                         val svc = DebridRules.matchedService(it, enabledDebrid)
                         if (primaryService != null && svc != null && svc != primaryService) 1 else 0
@@ -124,7 +125,8 @@ object TvStreamOrder {
         val p720 = playable
             .filter { DebridRules.is720Only(it) && !seen.contains(it.cacheKey) }
             .sortedWith(
-                compareByDescending<StreamItem> { if (DebridRules.isDebridCached(it, enabledDebrid)) 1 else 0 }
+                torrentsLast
+                    .thenByDescending { if (DebridRules.isDebridCached(it, enabledDebrid)) 1 else 0 }
                     .thenBy { DebridRules.parseSizeGb(it) ?: 999.0 }
                     .thenByDescending { it.qualityScore },
             )
@@ -209,13 +211,26 @@ object TvStreamOrder {
                 sizeGb <= maxGb
             }
             .sortedWith(
-                compareByDescending<StreamItem> { if (DebridRules.isDebridCached(it, enabledDebrid)) 1 else 0 }
+                torrentsLast
+                    .thenByDescending { if (DebridRules.isDebridCached(it, enabledDebrid)) 1 else 0 }
                     .thenByDescending { if (DebridRules.is1080ish(it)) 1 else 0 }
                     .thenByDescending { it.qualityScore }
                     .thenBy { DebridRules.parseSizeGb(it) ?: 999.0 },
             )
             .firstOrNull()
     }
+
+    /**
+     * Debrid rows outrank torrents everywhere. A torrent needs live peers, exposes the viewer's
+     * IP to the swarm and rarely beats a cached link, so it should only surface where nothing
+     * from a debrid service fits. Between two torrents, more seeders wins.
+     */
+    private val torrentsLast: Comparator<StreamItem> =
+        compareBy<StreamItem> { if (it.isTorrent) 1 else 0 }
+            .thenByDescending { if (it.isTorrent) it.seeders ?: 0 else 0 }
+
+    private fun debridFirst(streams: List<StreamItem>): List<StreamItem> =
+        streams.sortedWith(torrentsLast)
 
     private fun firstCached(
         streams: List<StreamItem>,

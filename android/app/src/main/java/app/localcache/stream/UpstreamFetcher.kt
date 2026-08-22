@@ -2,9 +2,11 @@ package app.localcache.stream
 
 import android.content.Context
 import android.util.Log
+import app.localcache.Prefs
 import app.localcache.config.AddonConfig
 import app.localcache.model.StreamItem
 import app.localcache.model.Upstream
+import app.localcache.torrent.MagnetLinks
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -28,7 +30,9 @@ class UpstreamFetcher(private val context: Context) {
     fun hasConfiguredUpstreams(): Boolean = AddonConfig.load(context).hasAnyUpstream()
 
     fun fetchAll(type: String, id: String): List<StreamItem> {
-        val cacheKey = "$type/$id"
+        // Torrent rows are filtered at parse time, so the toggle has to be part of the key or
+        // flipping it would keep serving the previous answer until the cache expires.
+        val cacheKey = "$type/$id" + if (Prefs.allowTorrents(context)) "+torrents" else ""
         cached(cacheKey)?.let {
             Log.i(TAG, "fetchAll $cacheKey -> ${it.size} streams (cached)")
             return it
@@ -329,35 +333,46 @@ class UpstreamFetcher(private val context: Context) {
 
     private fun parseStreams(source: String, type: String, id: String, data: JSONObject): List<StreamItem> {
         val streams = data.optJSONArray("streams") ?: return emptyList()
+        val allowTorrents = Prefs.allowTorrents(context)
         val out = mutableListOf<StreamItem>()
 
         for (i in 0 until streams.length()) {
             val s = streams.getJSONObject(i)
-            val playUrl = s.optString("url", "")
-            // HTTP debrid only — never surface magnets / infoHash-only torrents in Stremio.
-            if (!playUrl.startsWith("http://", ignoreCase = true) &&
-                !playUrl.startsWith("https://", ignoreCase = true)
-            ) {
-                continue
-            }
-
             val rawName = s.optString("name", s.optString("title", "Stream"))
             val title = s.optString("title").takeIf { it.isNotBlank() }
             val description = s.optString("description").takeIf { it.isNotBlank() }
             val filename = s.optJSONObject("behaviorHints")
                 ?.optString("filename")
                 ?.takeIf { it.isNotBlank() }
-            val cacheKey = buildCacheKey(type, id, source, playUrl)
+
+            val playUrl = s.optString("url", "")
+            val isHttp = playUrl.startsWith("http://", ignoreCase = true) ||
+                playUrl.startsWith("https://", ignoreCase = true)
+
+            // A row is either a debrid HTTP link or a torrent. Torrent rows only exist when
+            // the viewer turned peer-to-peer on; otherwise Stremio never sees them.
+            val magnet = if (isHttp) null else magnetFor(s, playUrl, filename ?: title ?: rawName)
+            if (!isHttp && (magnet == null || !allowTorrents)) continue
+
+            val url = magnet ?: playUrl
+            // Key a torrent off its info hash, not the magnet: the tracker list an addon
+            // returns varies between calls, and a changed key would orphan the file already
+            // half-downloaded on the drive.
+            val identity = magnet?.let { MagnetLinks.infoHashOf(it) } ?: url
+            val cacheKey = buildCacheKey(type, id, source, identity)
 
             val draft = StreamItem(
                 cacheKey = cacheKey,
                 source = source,
                 label = rawName.replace("\n", " · ").replace(Regex("\\s+"), " ").trim(),
                 rawName = rawName,
-                url = playUrl,
+                url = url,
                 title = title,
                 description = description,
                 filename = filename,
+                isTorrent = magnet != null,
+                fileIndex = s.optInt("fileIdx", -1).takeIf { it >= 0 },
+                seeders = parseSeeders(listOfNotNull(rawName, title, description).joinToString("\n")),
             )
             // Prefer the real release / file name for APK status + USB labels.
             val release = StreamLabelFormatter.releaseName(draft)
@@ -365,6 +380,22 @@ class UpstreamFetcher(private val context: Context) {
         }
         return out
     }
+
+    /** Torrentio/Comet describe torrents as `infoHash` + `sources`, or occasionally a magnet url. */
+    private fun magnetFor(stream: JSONObject, playUrl: String, displayName: String): String? {
+        if (MagnetLinks.isMagnet(playUrl)) return playUrl
+
+        val infoHash = stream.optString("infoHash").takeIf { MagnetLinks.isValidInfoHash(it) }
+            ?: return null
+        val sources = stream.optJSONArray("sources")?.let { array ->
+            (0 until array.length()).map { array.optString(it) }
+        } ?: emptyList()
+        return MagnetLinks.build(infoHash, displayName, sources)
+    }
+
+    /** Torrentio prints seeders as `👤 42`; Comet uses the same convention. */
+    private fun parseSeeders(text: String): Int? =
+        Regex("""👤\s*(\d+)""").find(text)?.groupValues?.get(1)?.toIntOrNull()
 
     private fun buildCacheKey(type: String, id: String, source: String, url: String): String {
         val hash = sha1(url).take(12)

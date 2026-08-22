@@ -9,6 +9,7 @@ import app.localcache.storage.DiskQuota
 import app.localcache.storage.DownloadEngine
 import app.localcache.storage.StorageMode
 import app.localcache.storage.UsbDriveDetector
+import app.localcache.torrent.TorrentEngine
 import app.localcache.update.UpdateChecker
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoHTTPD.IHTTPSession
@@ -82,6 +83,7 @@ object SettingsPage {
                     cacheMaxGb = first("cacheMaxGb").toIntOrNull() ?: Prefs.DEFAULT_CACHE_MAX_GB,
                     resultMode = first("resultMode").ifBlank { AddonConfig.RESULT_FASTEST },
                     autoNextEpisode = params.containsKey("autoNextEpisode"),
+                    allowTorrents = params.containsKey("allowTorrents"),
                 )
                 if (BuildConfig.WUPLAY_MODE) {
                     Prefs.setPublicHost(context, first("publicHost").ifBlank { null })
@@ -171,6 +173,10 @@ object SettingsPage {
         val mFast = if (!snapshot.isCompleteResults() && !snapshot.isFastestResults()) "checked" else ""
         val mComplete = if (snapshot.isCompleteResults()) "checked" else ""
         val autoNextChecked = if (snapshot.autoNextEpisode) "checked" else ""
+        val torrentsChecked = if (snapshot.allowTorrents) "checked" else ""
+        val torrentHint = TorrentEngine.nativeError()
+            ?.let { "<br/><b>Torrent engine failed to load on this device:</b> ${escape(it)}" }
+            .orEmpty()
         val banner = when {
             saved -> """<div class="ok">${escape(status.orEmpty()).replace("\n", "<br/>")}</div>"""
             else -> ""
@@ -329,6 +335,13 @@ object SettingsPage {
         Auto-download next episode when the current one finishes</label>
     </div>
     <p class="hint">Off by default. When on, finishing an episode <b>you started</b> queues only the <b>next one</b> — not the whole season. Prefetched episodes do not keep chaining.</p>
+
+    <label>Torrents</label>
+    <div class="box">
+      <label class="row"><input type="checkbox" name="allowTorrents" value="1" $torrentsChecked>
+        Show magnet streams and download them peer-to-peer</label>
+    </div>
+    <p class="hint">Off by default. Debrid links stay first — torrents only fill in when nothing cached is available. While a torrent runs, your IP address is visible to everyone in the swarm, and it will be slower than a debrid link. Uploading is capped at 1 MB/s and stops the moment the file finishes.$torrentHint</p>
 
     <label>Cache max (GB)</label>
     <input type="number" name="cacheMaxGb" min="1" max="4096" value="${snapshot.cacheMaxGb}"/>

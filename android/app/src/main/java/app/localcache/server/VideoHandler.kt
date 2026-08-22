@@ -6,6 +6,7 @@ import app.localcache.storage.CacheEntry
 import app.localcache.storage.CacheRegistry
 import app.localcache.storage.DownloadEngine
 import app.localcache.storage.PlaybackStatus
+import app.localcache.torrent.TorrentEngine
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Response
@@ -48,6 +49,12 @@ object VideoHandler {
     /** How far past the written point still counts as "the downloader is nearly there". */
     private const val GROWING_GAP_BYTES = 8L * 1024 * 1024
 
+    /** A swarm can take a while to answer; do not fail the request while it is still looking. */
+    private const val TORRENT_METADATA_WAIT_MS = 75_000L
+
+    /** Torrents go quiet for longer than a debrid link ever should before they are dead. */
+    private const val TORRENT_STALL_TIMEOUT_MS = 240_000L
+
     private fun isHttpUrl(url: String): Boolean =
         url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)
 
@@ -77,20 +84,40 @@ object VideoHandler {
         val hasRange = rangeHeader != null
 
         if (entry.filePath == null) {
+            // A magnet cannot be proxied straight to the player — it has to land on the drive.
+            if (entry.isTorrent) {
+                val why = entry.lastError ?: "no cache folder selected"
+                Log.w(TAG, "no cache target for torrent $cacheKey ($why)")
+                return json(Status.INTERNAL_ERROR, """{"error":"Torrent needs a cache folder","message":"$why"}""")
+            }
             Log.w(TAG, "no cache target for $cacheKey (${entry.lastError}) — streaming direct")
             PlaybackStatus.markStreaming(cacheKey, entry.lastError ?: "no cache folder")
             return proxyToClient(entry.url, parsed.start, requestEnd(parsed, totalBytes, 0), totalBytes, hasRange, type)
         }
 
+        if (entry.isTorrent && totalBytes <= 0) {
+            val why = entry.lastError ?: "the swarm never sent the torrent details"
+            Log.w(TAG, "torrent $cacheKey has no size yet ($why)")
+            return json(Status.INTERNAL_ERROR, """{"error":"Torrent did not start","message":"$why"}""")
+        }
+
         val available = availableNow(entry)
         val onDisk = available?.size ?: 0L
         val haveStart = available != null && (available.complete || available.size > parsed.start)
-        val complete = entry.status == "complete" ||
-            (entry.filePath != null && File(entry.filePath!!).exists() && available?.complete == true)
 
         val end = requestEnd(parsed, totalBytes, onDisk)
         if (end < parsed.start) {
             return json(Status.RANGE_NOT_SATISFIABLE, """{"error":"Bad range"}""")
+        }
+
+        // A torrent has no second source to fall back to, so the drive is the only answer.
+        // Telling the engine where the playhead is lets it rush those pieces instead of
+        // grinding through the gap sequentially.
+        if (entry.isTorrent) {
+            TorrentEngine.requestOffset(cacheKey, parsed.start)
+            Log.i(TAG, "serving torrent $cacheKey: ${parsed.start}-$end (readable $onDisk)")
+            PlaybackStatus.markLocal(cacheKey, "torrent · $onDisk bytes ready")
+            return serveProgressive(entry, parsed.start, end, totalBytes, hasRange, type)
         }
 
         // Playhead is already on (or about to hit) the growing file: serve from storage and
@@ -120,13 +147,22 @@ object VideoHandler {
 
     private data class Available(val file: File, val size: Long, val complete: Boolean)
 
-    /** The finished file if it exists, otherwise the `.part` being written. */
+    /**
+     * The finished file if it exists, otherwise the `.part` being written, together with how
+     * much of it can actually be read from byte 0.
+     *
+     * libtorrent creates its `.part` sparse and full-length before a single piece has arrived,
+     * so for a torrent the file size is meaningless and the engine's contiguous count is used.
+     */
     private fun availableNow(entry: CacheEntry): Available? {
         val path = entry.filePath ?: return null
         val final = File(path)
         if (final.exists()) return Available(final, final.length(), true)
         val part = File("$path.part")
-        if (part.exists()) return Available(part, part.length(), false)
+        if (part.exists()) {
+            val readable = if (entry.isTorrent) entry.downloadedBytes else part.length()
+            return Available(part, readable, false)
+        }
         return null
     }
 
@@ -238,14 +274,30 @@ object VideoHandler {
         private fun positionBuffered(): Boolean =
             chunkStart >= 0 && position >= chunkStart && position < chunkStart + chunkLength
 
+        /**
+         * How far this stream can read before it has to wait.
+         *
+         * A torrent that was seeked into has pieces under the playhead that the count from the
+         * start of the file does not know about, so ask the engine about this offset instead.
+         */
+        private fun readableEnd(available: Available?): Long {
+            if (available == null) return 0L
+            if (!entry.isTorrent || available.complete) return available.size
+            val fromHere = TorrentEngine.readableEndFrom(entry.cacheKey, position)
+            return if (fromHere >= 0) maxOf(fromHere, available.size) else available.size
+        }
+
         /** Waits for data if the download has not reached this point yet. */
         private fun fillChunk(): Boolean {
             var idleSince = System.currentTimeMillis()
             var lastSize = -1L
+            val stallTimeoutMs =
+                if (entry.isTorrent) TORRENT_STALL_TIMEOUT_MS else STALL_TIMEOUT_MS
 
             while (!closed) {
-                val file = currentFile()
-                val size = file?.length() ?: 0L
+                val available = availableNow(entry)
+                val file = available?.file
+                val size = readableEnd(available)
 
                 if (file != null && position < size) {
                     val raf = open(file) ?: return false
@@ -273,10 +325,13 @@ object VideoHandler {
                     Log.i(TAG, "stop serving ${entry.cacheKey}: ${entry.status}")
                     return false
                 }
-                if (System.currentTimeMillis() - idleSince > STALL_TIMEOUT_MS) {
+                if (System.currentTimeMillis() - idleSince > stallTimeoutMs) {
                     Log.w(TAG, "stalled at $position of ${entry.cacheKey}")
                     return false
                 }
+
+                // Keep nudging: the piece the player is blocked on is the one worth rushing.
+                if (entry.isTorrent) TorrentEngine.requestOffset(entry.cacheKey, position)
 
                 try {
                     Thread.sleep(POLL_MS)
@@ -285,15 +340,6 @@ object VideoHandler {
                 }
             }
             return false
-        }
-
-        private fun currentFile(): File? {
-            val path = entry.filePath ?: return null
-            val final = File(path)
-            if (final.exists()) return final
-            val part = File("$path.part")
-            if (part.exists()) return part
-            return null
         }
 
         private fun open(file: File): RandomAccessFile? {
@@ -306,8 +352,8 @@ object VideoHandler {
         }
 
         override fun available(): Int {
-            val size = currentFile()?.length() ?: return 0
-            return minOf(remaining, maxOf(0, size - position)).toInt()
+            val size = availableNow(entry)?.size ?: return 0
+            return minOf(remaining, maxOf(0L, size - position)).toInt()
         }
 
         override fun close() {
@@ -506,8 +552,28 @@ object VideoHandler {
 
     private fun ensureTotalBytes(entry: CacheEntry): Long {
         if (entry.totalBytes > 0) return entry.totalBytes
+        // A magnet has no HEAD to ask; the size only exists once the swarm sends metadata.
+        if (entry.isTorrent) return awaitTorrentSize(entry)
         val total = UpstreamProxy.fetchTotalBytesSync(entry.url)
         if (total > 0) entry.totalBytes = total
+        return entry.totalBytes
+    }
+
+    /**
+     * Holds the response open until the torrent knows how big the file is. Answering with an
+     * unknown length instead would hand the player a one-byte range and end playback there.
+     */
+    private fun awaitTorrentSize(entry: CacheEntry): Long {
+        val deadline = System.currentTimeMillis() + TORRENT_METADATA_WAIT_MS
+        while (System.currentTimeMillis() < deadline) {
+            if (entry.totalBytes > 0) return entry.totalBytes
+            if (entry.status in TERMINAL_STATUSES) break
+            try {
+                Thread.sleep(POLL_MS)
+            } catch (_: InterruptedException) {
+                break
+            }
+        }
         return entry.totalBytes
     }
 

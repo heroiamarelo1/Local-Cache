@@ -57,6 +57,8 @@ object AddonConfig {
         val resultMode: String = RESULT_FASTEST,
         /** Prefetch next series episode after one finishes (default off). */
         val autoNextEpisode: Boolean = false,
+        /** Show and download magnet streams over BitTorrent (default off). */
+        val allowTorrents: Boolean = false,
     ) {
         /** First Torrentio URL — for simple TV fields / legacy display. */
         val torrentioManifestUrl: String get() = torrentioManifestUrls.firstOrNull().orEmpty()
@@ -134,6 +136,7 @@ object AddonConfig {
             cacheMaxGb = Prefs.cacheMaxGb(context),
             resultMode = normalizeResultMode(Prefs.resultMode(context)),
             autoNextEpisode = Prefs.autoNextEpisode(context),
+            allowTorrents = Prefs.allowTorrents(context),
         )
     }
 
@@ -155,6 +158,7 @@ object AddonConfig {
             cacheMaxGb = snapshot.cacheMaxGb.coerceIn(1, 4096),
             resultMode = normalizeResultMode(snapshot.resultMode),
             autoNextEpisode = snapshot.autoNextEpisode,
+            allowTorrents = snapshot.allowTorrents,
         )
 
         Prefs.setTorrentioManifestUrls(context, cleaned.torrentioManifestUrls)
@@ -165,6 +169,7 @@ object AddonConfig {
         Prefs.setCacheMaxGb(context, cleaned.cacheMaxGb)
         Prefs.setResultMode(context, cleaned.resultMode)
         Prefs.setAutoNextEpisode(context, cleaned.autoNextEpisode)
+        Prefs.setAllowTorrents(context, cleaned.allowTorrents)
 
         // Config changes should invalidate the 15‑minute upstream result cache.
         runCatching { app.localcache.stream.UpstreamFetcher(context).clearCache() }
@@ -196,6 +201,7 @@ object AddonConfig {
         .put("cacheMaxGb", snapshot.cacheMaxGb)
         .put("resultMode", snapshot.resultMode)
         .put("autoNextEpisode", snapshot.autoNextEpisode)
+        .put("allowTorrents", snapshot.allowTorrents)
 
     fun fromJson(obj: JSONObject): Snapshot {
         val services = mutableListOf<String>()
@@ -215,6 +221,7 @@ object AddonConfig {
             cacheMaxGb = obj.optInt("cacheMaxGb", Prefs.DEFAULT_CACHE_MAX_GB),
             resultMode = normalizeResultMode(obj.optString("resultMode", RESULT_FASTEST)),
             autoNextEpisode = obj.optBoolean("autoNextEpisode", false),
+            allowTorrents = obj.optBoolean("allowTorrents", false),
         )
     }
 
@@ -243,6 +250,7 @@ object AddonConfig {
         cacheMaxGb = Prefs.DEFAULT_CACHE_MAX_GB,
         resultMode = RESULT_FASTEST,
         autoNextEpisode = false,
+        allowTorrents = false,
     )
 
     /**
@@ -436,6 +444,11 @@ object AddonConfig {
         autoNextEpisode
           false (default) or true — after a series episode *you* started finishes,
           queue only the next episode (one ahead; does not download the whole season).
+
+        allowTorrents
+          false (default) or true — when true, magnet streams appear in Stremio and are
+          downloaded peer-to-peer instead of through a debrid service. Your IP is visible
+          to the swarm while a torrent runs; debrid links are not.
 
         After editing, Choose USB again in the app (or Save on /settings) to reload.
     """.trimIndent()

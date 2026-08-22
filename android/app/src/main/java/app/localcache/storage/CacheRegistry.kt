@@ -12,6 +12,11 @@ data class CacheEntry(
     val id: String?,
     val source: String?,
     var status: String = "registered",
+    /**
+     * Bytes that can be read from byte 0 onwards. For HTTP that is simply the size of the
+     * `.part`; for a torrent the file is sparse and full-length from the start, so only the
+     * engine knows how much is really there.
+     */
     var downloadedBytes: Long = 0,
     var totalBytes: Long = 0,
     var filePath: String? = null,
@@ -24,6 +29,10 @@ data class CacheEntry(
      * Completing an auto-prefetched episode must not chain into the whole season.
      */
     var autoPrefetched: Boolean = false,
+    /** Magnet stream: downloaded by [app.localcache.torrent.TorrentEngine], not over HTTP. */
+    val isTorrent: Boolean = false,
+    /** Which file inside the torrent the addon pointed at, when it said. */
+    val fileIndex: Int? = null,
 )
 
 object CacheRegistry {
@@ -40,6 +49,8 @@ object CacheRegistry {
                 type = type,
                 id = id,
                 source = stream.source,
+                isTorrent = stream.isTorrent,
+                fileIndex = stream.fileIndex,
             ),
         )
         // Upgrade a short "Torrentio 4K" label if we now know the real file name.
@@ -58,10 +69,16 @@ object CacheRegistry {
                 type = item.type,
                 id = item.id,
                 source = item.source,
+                isTorrent = item.isTorrent,
+                fileIndex = item.fileIndex,
             )
         }
         entry.filePath = item.file.absolutePath
-        entry.downloadedBytes = item.downloadedBytes
+        // A half-written torrent file is sparse and already full-length on disk, so its size
+        // says nothing about what is readable. Leave that to the engine.
+        if (!entry.isTorrent || item.complete) {
+            entry.downloadedBytes = item.downloadedBytes
+        }
         if (item.totalBytes > entry.totalBytes) entry.totalBytes = item.totalBytes
         if (item.complete) entry.status = "complete"
     }
@@ -119,7 +136,9 @@ object CacheRegistry {
                 entry.downloadedBytes = final.length()
                 entry.totalBytes = maxOf(entry.totalBytes, final.length())
             }
-            part.exists() -> {
+            // Sparse torrent parts report their full length immediately — trusting that here
+            // would tell playback the whole movie is on disk when almost none of it is.
+            part.exists() && !entry.isTorrent -> {
                 entry.downloadedBytes = part.length()
             }
         }

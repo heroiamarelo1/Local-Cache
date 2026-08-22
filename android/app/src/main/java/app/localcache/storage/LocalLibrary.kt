@@ -29,6 +29,8 @@ object LocalLibrary {
         val complete: Boolean,
         val downloadedBytes: Long,
         val totalBytes: Long,
+        val isTorrent: Boolean = false,
+        val fileIndex: Int? = null,
     )
 
     fun metaFile(finalFile: File): File = File(finalFile.absolutePath + META_SUFFIX)
@@ -45,6 +47,8 @@ object LocalLibrary {
             .put("id", entry.id ?: "")
             .put("source", entry.source ?: "")
             .put("totalBytes", entry.totalBytes)
+            .put("isTorrent", entry.isTorrent)
+            .put("fileIndex", entry.fileIndex ?: -1)
             .put("savedAt", System.currentTimeMillis())
 
         runCatching { meta.writeText(json.toString()) }
@@ -81,6 +85,8 @@ object LocalLibrary {
                 complete = complete,
                 downloadedBytes = file.length(),
                 totalBytes = meta.optLong("totalBytes").takeIf { it > 0 } ?: file.length(),
+                isTorrent = meta.optBoolean("isTorrent", false),
+                fileIndex = meta.optInt("fileIndex", -1).takeIf { it >= 0 },
             )
         }
     }
@@ -116,5 +122,7 @@ object LocalLibrary {
         rawName = item.rawName,
         url = item.url,
         title = item.rawName,
+        isTorrent = item.isTorrent,
+        fileIndex = item.fileIndex,
     )
 }

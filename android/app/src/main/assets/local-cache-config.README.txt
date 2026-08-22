@@ -31,11 +31,12 @@ localCometManifestUrls  (array)
   Leave empty if unused. Independent of cometManifestUrls.
 
 debridServices
-  REQUIRED: a debrid must be in your Torrentio/Comet manifest (HTTP links).
+  Strongly recommended: a debrid in your Torrentio/Comet manifest gives HTTP links,
+  which are faster and more private than torrents.
   Check only the debrid services you use (default: none):
   ["AllDebrid", "TorBox", "RealDebrid", "Premiumize", "DebridLink", "EasyDebrid", "Offcloud", "Putio"]
-  Local Cache is not a torrent client — magnets alone will not work.
   Only listed services are treated as cached when ranking streams.
+  With no debrid at all, turn on allowTorrents below or nothing will be playable.
 
 streamQuality
   "1080p"     — Recommended. Smaller files, safer on most USB sticks.
@@ -48,6 +49,17 @@ resultMode
   "fastest"  — default. ~1–3s for a debrid-cached hit; falls back to fast if none.
   "fast"     — answer sooner, fewer streams.
   "complete" — wait for all upstreams, more streams.
+
+autoNextEpisode
+  false (default) or true — after a series episode *you* started finishes, queue only
+  the next episode (one ahead; it does not download the whole season).
+
+allowTorrents
+  false (default) or true — when true, magnet streams show up in Stremio and are
+  downloaded peer-to-peer. Debrid rows still come first; torrents only fill the gaps.
+  While a torrent runs your IP address is visible to everyone in the swarm, which is
+  not the case with a debrid link. Uploading is capped at 1 MB/s and stops when the
+  file finishes.
 
 After editing the JSON on the USB stick, open Local Cache and tap
 Choose USB drive again so the app reloads the file.

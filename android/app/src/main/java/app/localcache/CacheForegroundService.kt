@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import app.localcache.server.ServerManager
 import app.localcache.storage.DownloadEngine
+import app.localcache.torrent.TorrentEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -114,6 +115,9 @@ class CacheForegroundService : Service() {
         runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
         wakeLock = null
         ServerManager.stop()
+        // The libtorrent session outlives coroutines on its own threads; without this it keeps
+        // the swarm connections (and the radio) alive after the service is gone.
+        runCatching { TorrentEngine.shutdown() }
         super.onDestroy()
     }
 

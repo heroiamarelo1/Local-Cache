@@ -12,19 +12,28 @@ You pick a stream like usual (Torrentio / Comet). **You can start watching while
 **No more buffering mid-movie.**  
 Once the file is local, your TV isn’t fighting your internet anymore. Smooth playback. That’s the whole point.
 
-**Latest APK:** [v0.4.28](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.4.28)
+**Latest APK:** [v0.5.0](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.5.0)
 
 ---
 
-## Debrid is required ⚡
+## Debrid is strongly recommended ⚡
 
-**You need a debrid service** (AllDebrid, TorBox, Real-Debrid, etc.).
-
-Local Cache only downloads **direct HTTP links**. Without debrid, Torrentio/Comet mostly return magnets — and this app is **not** a torrent client, so those won’t show as usable Local Cache streams.
+**Use a debrid service** (AllDebrid, TorBox, Real-Debrid, etc.). Debrid links are fast, private, and always available — a torrent is none of those things.
 
 1. Configure Torrentio / Comet **with your debrid account** (get the final `manifest.json` URL)
 2. Paste that URL in Local Cache `/settings`
 3. Check the same debrid service(s) in the settings checkboxes
+
+### Torrents 🧲 (optional, off by default)
+
+Since v0.5.0 Local Cache can also download **magnet** streams peer-to-peer, so it still works when you have no debrid account. Turn it on under **Torrents** in `/settings`.
+
+Debrid rows always come first — torrents only appear where nothing cached fits. Two things to know before enabling it:
+
+- **Your IP address is visible to everyone in the swarm** while a torrent runs. Debrid links are not.
+- It is **slower**, and a torrent with no seeders simply never starts.
+
+Uploading is capped at 1 MB/s and stops the moment a file finishes.
 
 ---
 
@@ -34,6 +43,7 @@ Local Cache only downloads **direct HTTP links**. Without debrid, Torrentio/Come
 - ▶️ **Play while downloading** — don’t wait for 100%
 - 💾 **USB recommended**, or **internal storage** fallback (quality compromises — TV storage is limited)
 - 🧠 Smart picks — prefers cached debrid links, 1080p or 4K+sound mode; on internal storage, prefers a stream that **fits free space**
+- 🧲 **Optional torrent downloads** (off by default) for when you have no debrid account
 - 🔗 Multiple Torrentio / Comet URLs (Torrentio = one debrid per link → add two for AD + TorBox)
 - 📱 Setup from your phone on the same Wi‑Fi — `/settings` for manifests, debrid filters, storage, resume/cancel downloads
 - 📊 Live download / playback status in the app and on `/settings`
@@ -45,7 +55,7 @@ Local Cache only downloads **direct HTTP links**. Without debrid, Torrentio/Come
 - Android TV / Google TV
 - [Stremio](https://www.stremio.com/) (or something compatible)
 - A USB drive formatted **exFAT** (recommended) — or enough free internal space (app suggests ~80% of free space; needs ≥2 GB free for internal mode)
-- Torrentio / Comet manifests configured **with a debrid account** (required)
+- Torrentio / Comet manifests, ideally configured **with a debrid account** (or enable torrents in `/settings`)
 
 ---
 

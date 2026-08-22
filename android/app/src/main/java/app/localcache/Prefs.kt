@@ -116,6 +116,17 @@ object Prefs {
         prefs(context).edit().putBoolean("auto_next_episode", enabled).apply()
     }
 
+    /**
+     * Show magnet streams and download them peer-to-peer. Off by default: torrent traffic is
+     * visible to anyone watching the swarm, which debrid links are not.
+     */
+    fun allowTorrents(context: Context): Boolean =
+        prefs(context).getBoolean("allow_torrents", false)
+
+    fun setAllowTorrents(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("allow_torrents", enabled).apply()
+    }
+
     fun debridServices(context: Context): List<String> {
         val raw = prefs(context).getString("debrid_services", null) ?: return emptyList()
         return raw.split(',').map { it.trim() }.filter { it.isNotBlank() }

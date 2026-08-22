@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import app.localcache.Prefs
 import app.localcache.server.UpstreamProxy
+import app.localcache.torrent.TorrentEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -89,11 +90,18 @@ object DownloadEngine {
             return
         }
 
-        if (target.part.exists()) {
+        if (target.part.exists() && !entry.isTorrent) {
             entry.downloadedBytes = target.part.length()
         }
 
         val ctx = context.applicationContext
+
+        if (entry.isTorrent && !Prefs.allowTorrents(ctx)) {
+            entry.status = "error"
+            entry.lastError = "Torrents are turned off in /settings"
+            Log.w(TAG, "refusing magnet ${entry.cacheKey} — torrents disabled")
+            return
+        }
 
         synchronized(lock) {
             if (!fromQueue) resumeQueue.clear()
@@ -117,6 +125,11 @@ object DownloadEngine {
                     previous?.join()
 
                     if (run.cancelled) return@launch
+
+                    if (entry.isTorrent) {
+                        downloadTorrent(ctx, entry, target, run)
+                        return@launch
+                    }
 
                     if (entry.totalBytes <= 0) {
                         val total = UpstreamProxy.fetchTotalBytesSync(entry.url)
@@ -194,7 +207,12 @@ object DownloadEngine {
             )
             .map { item ->
                 val entry = CacheRegistry.get(item.cacheKey)
-                val done = item.downloadedBytes
+                // An unfinished torrent file is sparse and already full-length on disk.
+                val done = if (item.isTorrent && !item.complete) {
+                    entry?.downloadedBytes ?: 0L
+                } else {
+                    item.downloadedBytes
+                }
                 val total = maxOf(item.totalBytes, entry?.totalBytes ?: 0L)
                 val progress = when {
                     item.complete -> 100
@@ -325,6 +343,9 @@ object DownloadEngine {
         val job = activeJob
 
         run.stop()
+        // A torrent does not notice the flag until its next poll, and the caller may be about
+        // to delete the file underneath it.
+        TorrentEngine.abort(run.cacheKey)
 
         CacheRegistry.get(run.cacheKey)?.let { entry ->
             if (entry.status == "downloading" || entry.status == "queued") {
@@ -542,6 +563,44 @@ object DownloadEngine {
         }
     }
 
+    /**
+     * Magnet streams. The torrent engine owns the whole transfer, including how much space it
+     * needs — the real file size is only known once metadata arrives from the swarm, which is
+     * why the quota check is handed over as a callback instead of running up front.
+     */
+    private fun downloadTorrent(ctx: Context, entry: CacheEntry, target: Target, run: Run) {
+        // Write the sidecar before any bytes land so the drive stays self-describing.
+        LocalLibrary.writeMeta(entry)
+
+        val result = TorrentEngine.download(
+            entry = entry,
+            partFile = target.part,
+            finalFile = target.final,
+            tempDir = ctx.cacheDir,
+            cancelled = { run.cancelled },
+            onMetadata = {
+                if (makeRoom(ctx, entry, target) == null) {
+                    false
+                } else {
+                    LocalLibrary.writeMeta(entry)
+                    true
+                }
+            },
+        )
+
+        if (result.ok) return
+
+        entry.bytesPerSec = 0
+        if (run.cancelled) {
+            Log.i(TAG, "cancelled ${entry.cacheKey} at ${entry.downloadedBytes} bytes")
+            return
+        }
+
+        entry.status = "error"
+        entry.lastError = result.error ?: entry.lastError ?: "Torrent download failed"
+        Log.e(TAG, "torrent failed ${entry.cacheKey}: ${entry.lastError}")
+    }
+
     private class OutOfSpace(message: String) : IllegalStateException(message)
 
     private class Cancelled : IllegalStateException("cancelled")
@@ -573,10 +632,11 @@ object DownloadEngine {
             "downloading" -> "downloading"
             else -> entry.status
         }
+        val swarm = if (entry.isTorrent) TorrentEngine.statusDetail()?.let { " · $it" }.orEmpty() else ""
         val stats = if (total > 0) {
-            "$progress% · ${gb(done)} / ${gb(total)} GB$speed · $state"
+            "$progress% · ${gb(done)} / ${gb(total)} GB$speed · $state$swarm"
         } else {
-            "${gb(done)} GB$speed · $state"
+            "${gb(done)} GB$speed · $state$swarm"
         }
         return StatusParts(shortName, stats)
     }

@@ -5,12 +5,19 @@ data class StreamItem(
     val source: String,
     val label: String,
     val rawName: String,
+    /** Debrid HTTP link, or a magnet URI when [isTorrent]. */
     val url: String,
     val title: String? = null,
     val description: String? = null,
     /** From upstream behaviorHints.filename when present (best release name). */
     val filename: String? = null,
     val qualityScore: Int = 0,
+    /** Magnet row from Torrentio/Comet — downloaded peer-to-peer instead of from a debrid. */
+    val isTorrent: Boolean = false,
+    /** Index of the wanted file inside the torrent, when the addon said which. */
+    val fileIndex: Int? = null,
+    /** Seeders reported by the addon, used to prefer torrents that will actually move. */
+    val seeders: Int? = null,
 )
 
 data class StreamPick(

@@ -10,6 +10,7 @@ android/.idea/
 
 # Built APKs live in GitHub Releases, not in git history
 *.apk
+*.idsig
 
 # Secrets / local config
 .env

@@ -576,7 +576,6 @@ object DownloadEngine {
             entry = entry,
             partFile = target.part,
             finalFile = target.final,
-            tempDir = ctx.cacheDir,
             cancelled = { run.cancelled },
             onMetadata = {
                 if (makeRoom(ctx, entry, target) == null) {

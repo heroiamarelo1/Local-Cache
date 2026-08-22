@@ -48,6 +48,34 @@ object MagnetLinks {
             ?.takeIf { isValidInfoHash(it) }
 
     /**
+     * Info hash as 40 hex characters, converting the base32 form some sites still use.
+     * libtorrent's lookup APIs only take hex.
+     */
+    fun infoHashHex(magnet: String): String? {
+        val hash = infoHashOf(magnet) ?: return null
+        if (HEX40.matches(hash)) return hash.lowercase(Locale.US)
+        return base32ToHex(hash.uppercase(Locale.US))
+    }
+
+    private fun base32ToHex(value: String): String? {
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        var buffer = 0L
+        var bits = 0
+        val out = StringBuilder(40)
+        for (c in value) {
+            val index = alphabet.indexOf(c)
+            if (index < 0) return null
+            buffer = (buffer shl 5) or index.toLong()
+            bits += 5
+            if (bits >= 8) {
+                bits -= 8
+                out.append("%02x".format((buffer shr bits) and 0xFF))
+            }
+        }
+        return out.toString().takeIf { it.length == 40 }
+    }
+
+    /**
      * Builds a magnet from an addon row. [sources] accepts Torrentio's raw entries
      * (`tracker:udp://…`, `dht:…`) as well as plain announce URLs.
      */

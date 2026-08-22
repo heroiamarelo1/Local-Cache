@@ -28,7 +28,7 @@ object TorrentEngine {
     private const val TAG = "TorrentEngine"
 
     /** Magnet metadata is usually seconds; a dead torrent should not hang the queue for long. */
-    private const val METADATA_TIMEOUT_S = 90
+    private const val METADATA_TIMEOUT_MS = 90_000L
 
     /** Give a torrent this long to produce its first byte before calling it dead. */
     private const val FIRST_BYTES_TIMEOUT_MS = 5 * 60_000L
@@ -64,6 +64,10 @@ object TorrentEngine {
     /** The torrent currently being written, so playback can ask for pieces it needs sooner. */
     @Volatile
     private var active: Active? = null
+
+    /** What the engine is doing right now, for the notification and /settings. */
+    @Volatile
+    private var phase: String? = null
 
     private class Active(
         val cacheKey: String,
@@ -139,11 +143,16 @@ object TorrentEngine {
         Log.i(TAG, "aborted $cacheKey")
     }
 
-    /** Live line for /settings while a torrent is running. */
+    /**
+     * Live line for the notification and /settings. Includes libtorrent's own state name: a
+     * torrent that reads "downloading, 40 peers" but never moves is a very different problem
+     * from one stuck in "downloading_metadata" with none.
+     */
     fun statusDetail(): String? {
-        val current = active ?: return null
-        val status = runCatching { current.handle.status() }.getOrNull() ?: return null
-        return "${status.numPeers()} peers · ${status.numSeeds()} seeds"
+        val current = active ?: return phase
+        val status = runCatching { current.handle.status() }.getOrNull() ?: return phase
+        val state = status.state().name.lowercase().replace('_', ' ')
+        return "$state · ${status.numPeers()} peers · ${status.numSeeds()} seeds"
     }
 
     /**
@@ -156,7 +165,6 @@ object TorrentEngine {
         entry: CacheEntry,
         partFile: File,
         finalFile: File,
-        tempDir: File,
         cancelled: () -> Boolean,
         onMetadata: (totalBytes: Long) -> Boolean,
     ): Result {
@@ -170,25 +178,44 @@ object TorrentEngine {
         }
 
         val magnet = MagnetLinks.withFallbackTrackers(entry.url)
+        val infoHash = MagnetLinks.infoHashHex(entry.url)
+            ?: return Result(false, "Magnet has no usable info hash")
+        val sha1 = runCatching { Sha1Hash.parseHex(infoHash) }.getOrNull()
+            ?: return Result(false, "Magnet info hash could not be parsed")
+
         var handle: TorrentHandle? = null
 
         try {
-            entry.lastError = "finding peers for the torrent…"
-            Log.i(TAG, "fetching metadata for ${entry.cacheKey}")
-
-            // Metadata is fetched into app storage, never the cache folder: a stray scratch
-            // file on the USB drive would confuse the quota scanner.
-            val metadata = runCatching { manager.fetchMagnet(magnet, METADATA_TIMEOUT_S, tempDir) }
-                .onFailure { Log.w(TAG, "fetchMagnet failed: ${it.message}") }
-                .getOrNull()
+            // A torrent is added exactly once. Adding it twice is not an error libtorrent
+            // reports — the second add silently returns the first handle, and if that one was
+            // still winding down from a previous attempt it sits at 0% forever.
+            dropFromSession(manager, sha1)
             if (cancelled()) return Result(false, null)
-            if (metadata == null || metadata.isEmpty()) {
-                return Result(false, "No peers answered for this torrent (metadata timed out)")
-            }
 
-            val torrentInfo = runCatching { TorrentInfo(metadata) }.getOrNull()
-            if (torrentInfo == null || !torrentInfo.isValid) {
-                return Result(false, "Torrent metadata was unreadable")
+            report(entry, "finding peers for the torrent…")
+            Log.i(TAG, "adding $infoHash for ${entry.cacheKey} -> ${saveDir.absolutePath}")
+
+            // DEFAULT_DONT_DOWNLOAD: a magnet's file list is unknown until metadata lands, and
+            // without this libtorrent would immediately start allocating every file in the
+            // torrent across the cache folder before we can say we only want one of them.
+            manager.download(
+                magnet,
+                saveDir,
+                TorrentFlags.SEQUENTIAL_DOWNLOAD.or_(TorrentFlags.DEFAULT_DONT_DOWNLOAD),
+            )
+
+            val added = awaitHandle(manager, sha1)
+                ?: return Result(false, "Torrent could not be added to the session")
+            handle = added
+
+            // Auto-manage would pause and resume the torrent behind our back.
+            runCatching { added.unsetFlags(TorrentFlags.AUTO_MANAGED) }
+
+            val torrentInfo = awaitMetadata(added, entry, cancelled)
+            if (cancelled()) return Result(false, null)
+            if (torrentInfo == null) {
+                val peers = runCatching { added.status().numPeers() }.getOrDefault(0)
+                return Result(false, "No peers sent the torrent details ($peers peers reached)")
             }
 
             val files = torrentInfo.files()
@@ -208,37 +235,25 @@ object TorrentEngine {
 
             val resuming = partFile.exists() && partFile.length() > 0
 
-            // Only the chosen file is wanted; the rest are never allocated on the drive.
-            val priorities = Priority.array(Priority.IGNORE, torrentInfo.numFiles())
-            priorities[fileIndex] = Priority.TOP_PRIORITY
-
-            manager.download(
-                torrentInfo,
-                saveDir,
-                null,
-                priorities,
-                null,
-                TorrentFlags.SEQUENTIAL_DOWNLOAD.or_(TorrentFlags.PAUSED),
-            )
-
-            val added = awaitHandle(manager, torrentInfo.infoHash())
-                ?: return Result(false, "Torrent could not be added to the session")
-            handle = added
-
-            // Auto-manage would resume the torrent behind our back mid-rename.
-            runCatching { added.unsetFlags(TorrentFlags.AUTO_MANAGED) }
-            runCatching { added.pause() }
-
+            // Rename before any file is wanted, so not one byte can land on the wrong path.
             if (!placeFileAt(added, fileIndex, partFile)) {
                 return Result(false, "Could not place the torrent file in the cache folder")
             }
 
+            val priorities = Priority.array(Priority.IGNORE, torrentInfo.numFiles())
+            priorities[fileIndex] = Priority.TOP_PRIORITY
+            runCatching { added.prioritizeFiles(priorities) }
+                .onFailure { return Result(false, "Could not select the file: ${it.message}") }
+
             if (resuming) {
                 Log.i(TAG, "rechecking existing ${partFile.name} (${partFile.length()} bytes)")
-                entry.lastError = "checking the part already on disk…"
+                report(entry, "checking the part already on disk…")
                 runCatching { added.forceRecheck() }
             }
 
+            // Belt and braces: nothing above should have left it paused or upload-only, but a
+            // torrent stuck in either state is invisible except as a download that never moves.
+            runCatching { added.unsetFlags(TorrentFlags.PAUSED.or_(TorrentFlags.UPLOAD_MODE)) }
             runCatching { added.resume() }
 
             val pieceLength = torrentInfo.pieceLength().toLong()
@@ -278,6 +293,7 @@ object TorrentEngine {
             return Result(false, e.message ?: e.javaClass.simpleName)
         } finally {
             active = null
+            phase = null
             entry.bytesPerSec = 0
             handle?.let { open ->
                 // Cancelled or failed: drop it from the session but keep the .part for resume.
@@ -285,6 +301,61 @@ object TorrentEngine {
                 runCatching { manager.remove(open) }
             }
         }
+    }
+
+    /**
+     * Removes any torrent already in the session for [sha1] and waits for it to actually go.
+     * `remove_torrent` is asynchronous, and re-adding before it lands hands back the old
+     * handle instead of a fresh one.
+     */
+    private fun dropFromSession(manager: SessionManager, sha1: Sha1Hash) {
+        val existing = runCatching { manager.find(sha1) }.getOrNull() ?: return
+        Log.i(TAG, "removing leftover torrent ${sha1.toHex()} before re-adding")
+        runCatching { manager.remove(existing) }
+
+        val deadline = System.currentTimeMillis() + 15_000
+        while (System.currentTimeMillis() < deadline) {
+            if (runCatching { manager.find(sha1) }.getOrNull() == null) return
+            try {
+                Thread.sleep(100)
+            } catch (_: InterruptedException) {
+                return
+            }
+        }
+        Log.w(TAG, "leftover torrent ${sha1.toHex()} did not leave the session in time")
+    }
+
+    /** Waits for the swarm to send the file list a magnet does not carry. */
+    private fun awaitMetadata(
+        handle: TorrentHandle,
+        entry: CacheEntry,
+        cancelled: () -> Boolean,
+    ): TorrentInfo? {
+        val deadline = System.currentTimeMillis() + METADATA_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            if (cancelled() || !handle.isValid) return null
+
+            val status = runCatching { handle.status() }.getOrNull()
+            if (status?.hasMetadata() == true) {
+                val info = runCatching { handle.torrentFile() }.getOrNull()
+                if (info != null && info.isValid) return info
+            }
+
+            val peers = status?.numPeers() ?: 0
+            report(entry, if (peers > 0) "asking $peers peers for the file list…" else "looking for peers…")
+
+            try {
+                Thread.sleep(500)
+            } catch (_: InterruptedException) {
+                return null
+            }
+        }
+        return null
+    }
+
+    private fun report(entry: CacheEntry, message: String?) {
+        phase = message
+        entry.lastError = message
     }
 
     /** Polls the torrent, publishing the contiguous readable prefix as it grows. */
@@ -329,16 +400,28 @@ object TorrentEngine {
             val peers = status?.numPeers() ?: 0
             val seeds = status?.numSeeds() ?: 0
             val state = status?.state()?.name?.lowercase().orEmpty()
-            entry.lastError = when {
-                state.contains("checking") -> "checking the part already on disk…"
-                peers == 0 -> "searching for peers…"
-                contiguous <= 0 -> "connected to $peers peers — waiting for the first pieces"
-                else -> null
-            }
+            report(
+                entry,
+                when {
+                    state.contains("checking") -> "checking the part already on disk…"
+                    peers == 0 -> "searching for peers…"
+                    // Verified MB separates "the swarm is not sending" from "it is sending but
+                    // the piece bookkeeping here is wrong" — they look identical at 0%.
+                    contiguous <= 0 ->
+                        "$peers peers ($state) · ${(status?.totalWantedDone() ?: 0) / (1024 * 1024)} MB " +
+                            "verified · waiting for the opening pieces"
+                    else -> null
+                },
+            )
 
             val idleMs = System.currentTimeMillis() - lastProgressAt
             if (contiguous <= 0 && System.currentTimeMillis() - startedAt > FIRST_BYTES_TIMEOUT_MS) {
-                return Result(false, "Torrent found no usable peers ($peers peers, $seeds seeds)")
+                val done = status?.totalWantedDone() ?: 0
+                return Result(
+                    false,
+                    "Torrent sent no usable data in 5 min " +
+                        "($state, $peers peers, $seeds seeds, ${done / (1024 * 1024)} MB verified)",
+                )
             }
             if (contiguous > 0 && idleMs > STALL_TIMEOUT_MS) {
                 return Result(false, "Torrent stalled at ${contiguous / (1024 * 1024)} MB ($peers peers)")

@@ -55,6 +55,8 @@ object AddonConfig {
         val streamQuality: String,
         val cacheMaxGb: Int,
         val resultMode: String = RESULT_FASTEST,
+        /** Prefetch next series episode after one finishes (default off). */
+        val autoNextEpisode: Boolean = false,
     ) {
         /** First Torrentio URL — for simple TV fields / legacy display. */
         val torrentioManifestUrl: String get() = torrentioManifestUrls.firstOrNull().orEmpty()
@@ -131,6 +133,7 @@ object AddonConfig {
             streamQuality = quality,
             cacheMaxGb = Prefs.cacheMaxGb(context),
             resultMode = normalizeResultMode(Prefs.resultMode(context)),
+            autoNextEpisode = Prefs.autoNextEpisode(context),
         )
     }
 
@@ -151,6 +154,7 @@ object AddonConfig {
             },
             cacheMaxGb = snapshot.cacheMaxGb.coerceIn(1, 4096),
             resultMode = normalizeResultMode(snapshot.resultMode),
+            autoNextEpisode = snapshot.autoNextEpisode,
         )
 
         Prefs.setTorrentioManifestUrls(context, cleaned.torrentioManifestUrls)
@@ -160,6 +164,7 @@ object AddonConfig {
         Prefs.setStreamQuality(context, cleaned.streamQuality)
         Prefs.setCacheMaxGb(context, cleaned.cacheMaxGb)
         Prefs.setResultMode(context, cleaned.resultMode)
+        Prefs.setAutoNextEpisode(context, cleaned.autoNextEpisode)
 
         // Config changes should invalidate the 15‑minute upstream result cache.
         runCatching { app.localcache.stream.UpstreamFetcher(context).clearCache() }
@@ -190,6 +195,7 @@ object AddonConfig {
         .put("streamQuality", snapshot.streamQuality)
         .put("cacheMaxGb", snapshot.cacheMaxGb)
         .put("resultMode", snapshot.resultMode)
+        .put("autoNextEpisode", snapshot.autoNextEpisode)
 
     fun fromJson(obj: JSONObject): Snapshot {
         val services = mutableListOf<String>()
@@ -208,6 +214,7 @@ object AddonConfig {
             streamQuality = obj.optString("streamQuality", QUALITY_1080P),
             cacheMaxGb = obj.optInt("cacheMaxGb", Prefs.DEFAULT_CACHE_MAX_GB),
             resultMode = normalizeResultMode(obj.optString("resultMode", RESULT_FASTEST)),
+            autoNextEpisode = obj.optBoolean("autoNextEpisode", false),
         )
     }
 
@@ -235,6 +242,7 @@ object AddonConfig {
         streamQuality = QUALITY_1080P,
         cacheMaxGb = Prefs.DEFAULT_CACHE_MAX_GB,
         resultMode = RESULT_FASTEST,
+        autoNextEpisode = false,
     )
 
     /**
@@ -424,6 +432,10 @@ object AddonConfig {
           "fastest"  — default. ~1–3s debrid-cached hit; falls back to fast.
           "fast"     — answer sooner, fewer streams.
           "complete" — wait for all upstreams, more streams.
+
+        autoNextEpisode
+          false (default) or true — after a series episode *you* started finishes,
+          queue only the next episode (one ahead; does not download the whole season).
 
         After editing, Choose USB again in the app (or Save on /settings) to reload.
     """.trimIndent()

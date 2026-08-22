@@ -108,6 +108,14 @@ object Prefs {
             .apply()
     }
 
+    /** When a series episode finishes downloading, start the next one in the background. */
+    fun autoNextEpisode(context: Context): Boolean =
+        prefs(context).getBoolean("auto_next_episode", false)
+
+    fun setAutoNextEpisode(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("auto_next_episode", enabled).apply()
+    }
+
     fun debridServices(context: Context): List<String> {
         val raw = prefs(context).getString("debrid_services", null) ?: return emptyList()
         return raw.split(',').map { it.trim() }.filter { it.isNotBlank() }

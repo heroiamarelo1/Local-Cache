@@ -19,6 +19,11 @@ data class CacheEntry(
     var lastAccessMs: Long = 0,
     /** Measured download throughput, so we can tell a slow link from a slow drive. */
     var bytesPerSec: Long = 0,
+    /**
+     * True when this file was queued by auto-next (not opened in Stremio).
+     * Completing an auto-prefetched episode must not chain into the whole season.
+     */
+    var autoPrefetched: Boolean = false,
 )
 
 object CacheRegistry {

@@ -141,6 +141,9 @@ object DownloadEngine {
                         }
                         !run.cancelled && entry.status == "complete"
                     }
+                    if (finishedOk) {
+                        AutoNextEpisode.onDownloadComplete(ctx, entry)
+                    }
                     if (finishedOk || (!run.cancelled && entry.status == "error")) {
                         startNextQueued(ctx)
                     }
@@ -149,24 +152,61 @@ object DownloadEngine {
         }
     }
 
-    fun listResumable(context: Context): List<Resumable> {
+    /**
+     * Start [cacheKey] now, or append to the resume queue if another download is active.
+     * Used by settings resume and auto-next episode.
+     */
+    fun queueOrStart(context: Context, cacheKey: String) {
+        appContext = context.applicationContext
+        val entry = CacheRegistry.get(cacheKey) ?: return
+        if (entry.url.isBlank()) return
+
+        val startNow = synchronized(lock) {
+            if (activeKeyValue == null) {
+                true
+            } else if (activeKeyValue == cacheKey) {
+                false
+            } else {
+                if (!resumeQueue.contains(cacheKey)) {
+                    resumeQueue.addLast(cacheKey)
+                    if (entry.status != "downloading") {
+                        entry.status = "queued"
+                        entry.lastError = "queued — waiting"
+                    }
+                    Log.i(TAG, "queued $cacheKey")
+                }
+                false
+            }
+        }
+        if (startNow) {
+            ensureStarted(context, cacheKey, fromQueue = true)
+        }
+    }
+
+    fun listCached(context: Context): List<Resumable> {
         LocalLibrary.rehydrate(context)
         val active = activeKeyValue
         return LocalLibrary.scan(context)
-            .filter { !it.complete && it.cacheKey.isNotBlank() && it.url.isNotBlank() }
-            .sortedByDescending { it.downloadedBytes }
+            .filter { it.cacheKey.isNotBlank() && it.url.isNotBlank() }
+            .sortedWith(
+                compareByDescending<LocalLibrary.Item> { it.complete }
+                    .thenByDescending { it.downloadedBytes },
+            )
             .map { item ->
                 val entry = CacheRegistry.get(item.cacheKey)
                 val done = item.downloadedBytes
                 val total = maxOf(item.totalBytes, entry?.totalBytes ?: 0L)
                 val progress = when {
+                    item.complete -> 100
                     total > 0 -> minOf(99, ((done * 100) / total).toInt())
                     done > 0 -> CacheRegistry.progress(item.cacheKey).coerceAtLeast(1)
                     else -> 0
                 }
                 val status = when {
+                    item.complete -> "complete"
                     item.cacheKey == active -> "downloading"
                     entry?.status == "paused" -> "paused"
+                    entry?.status == "queued" -> "queued"
                     entry?.status == "error" -> "error"
                     else -> "incomplete"
                 }
@@ -184,6 +224,9 @@ object DownloadEngine {
             }
     }
 
+    fun listResumable(context: Context): List<Resumable> =
+        listCached(context).filter { it.status != "complete" }
+
     /** Resume one or more paused/incomplete downloads (queued, one at a time). */
     fun resumeSelected(context: Context, cacheKeys: List<String>): String {
         val keys = cacheKeys.map { it.trim() }.filter { it.isNotBlank() }.distinct()
@@ -196,7 +239,7 @@ object DownloadEngine {
             val target = resolveTarget(context, entry) ?: return@filter false
             !target.final.exists() && (target.part.exists() || entry.downloadedBytes > 0 || true)
         }
-        if (ready.isEmpty()) return "None of the selected files can be resumed."
+        if (ready.isEmpty()) return "None of the selected files can be resumed (complete files stay as-is)."
 
         synchronized(lock) {
             resumeQueue.clear()
@@ -219,20 +262,17 @@ object DownloadEngine {
         }
     }
 
-    /** Cancel selected incomplete downloads and delete their .part files. */
-    fun cancelSelected(context: Context, cacheKeys: List<String>): String {
+    /** Delete selected cache files — complete or incomplete (.part / final + meta). */
+    fun deleteSelected(context: Context, cacheKeys: List<String>): String {
         val keys = cacheKeys.map { it.trim() }.filter { it.isNotBlank() }.distinct()
-        if (keys.isEmpty()) return "No downloads selected."
+        if (keys.isEmpty()) return "No files selected."
 
-        var cancelled = 0
         var deleted = 0
         val stoppedActive = synchronized(lock) {
             resumeQueue.removeAll(keys.toSet())
             val active = activeKeyValue
             if (active != null && active in keys) {
-                stopActiveLocked("cancelled from /settings", deletePartial = true)
-                cancelled++
-                deleted++
+                stopActiveLocked("deleted from /settings", deletePartial = true)
                 active
             } else {
                 null
@@ -240,24 +280,35 @@ object DownloadEngine {
         }
 
         keys.forEach { key ->
-            if (key == stoppedActive) return@forEach
             val entry = CacheRegistry.get(key)
             val path = entry?.filePath
                 ?: CachePaths.finalFile(context, key, entry?.url.orEmpty())?.absolutePath
             if (path != null) {
-                val part = CachePaths.partFile(File(path))
-                if (part.exists() && part.delete()) deleted++
-                LocalLibrary.deleteMeta(File(path))
+                val final = File(path)
+                val part = CachePaths.partFile(final)
+                if (key == stoppedActive) {
+                    // stopActiveLocked already removed the .part when deletePartial=true
+                    if (final.exists() && final.delete()) deleted++
+                    LocalLibrary.deleteMeta(final)
+                } else {
+                    if (part.exists() && part.delete()) deleted++
+                    if (final.exists() && final.delete()) deleted++
+                    LocalLibrary.deleteMeta(final)
+                }
             }
+            CacheRegistry.markEvicted(key)
             entry?.status = "cancelled"
+            entry?.lastError = "deleted from /settings"
             entry?.downloadedBytes = 0
             entry?.bytesPerSec = 0
-            entry?.lastError = "cancelled from /settings"
-            cancelled++
         }
 
-        return "Cancelled $cancelled download(s), removed $deleted partial file(s)."
+        return "Removed $deleted file(s) from storage."
     }
+
+    /** @deprecated Prefer [deleteSelected] — kept name used by older settings labels. */
+    fun cancelSelected(context: Context, cacheKeys: List<String>): String =
+        deleteSelected(context, cacheKeys)
 
     private fun startNextQueued(context: Context) {
         val next = synchronized(lock) { resumeQueue.removeFirstOrNull() } ?: return

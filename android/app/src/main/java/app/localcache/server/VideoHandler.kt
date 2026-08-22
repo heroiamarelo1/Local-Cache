@@ -45,9 +45,6 @@ object VideoHandler {
      */
     private const val HANDOVER_MARGIN_BYTES = 64L * 1024 * 1024
 
-    /** If local is only this far ahead (or less), fall back to debrid. */
-    private const val FALLBACK_MARGIN_BYTES = 8L * 1024 * 1024
-
     /** How far past the written point still counts as "the downloader is nearly there". */
     private const val GROWING_GAP_BYTES = 8L * 1024 * 1024
 
@@ -96,30 +93,19 @@ object VideoHandler {
             return json(Status.RANGE_NOT_SATISFIABLE, """{"error":"Bad range"}""")
         }
 
-        // Incomplete HTTP downloads: hybrid (local when safely ahead, else debrid).
-        // One-way handover used to stall when the .part file lost the race with playback.
-        if (!complete && isHttpUrl(entry.url)) {
-            val preferLocal = haveStart && onDisk > parsed.start + HANDOVER_MARGIN_BYTES
-            if (preferLocal) {
-                Log.i(TAG, "hybrid $cacheKey start local: ${parsed.start}-$end (on disk $onDisk)")
-                PlaybackStatus.markLocal(cacheKey, "serving bytes $onDisk on disk")
-            } else {
-                val reason = entry.lastError ?: "download is at $onDisk"
-                Log.i(TAG, "hybrid $cacheKey start debrid: ${parsed.start}- ($reason)")
-                PlaybackStatus.markStreaming(cacheKey, reason)
-            }
-            return serveHybrid(entry, parsed.start, end, totalBytes, hasRange, type, startOnDisk = preferLocal)
-        }
-
-        // Complete (or nearly local) files: progressive from storage.
+        // Playhead is already on (or about to hit) the growing file: serve from storage and
+        // wait. Opening a second debrid stream here steals bandwidth from the same download
+        // and caused Stremio to buffer every few seconds while watching the active episode.
         if (haveStart || arrivingShortly(entry, parsed.start, onDisk, totalBytes)) {
             Log.i(TAG, "serving $cacheKey from storage: ${parsed.start}-$end (on disk $onDisk)")
             PlaybackStatus.markLocal(cacheKey, "serving bytes $onDisk on disk")
             return serveProgressive(entry, parsed.start, end, totalBytes, hasRange, type)
         }
 
+        // Cold start / seek past the write head: stream from debrid until local is safely ahead,
+        // then stick to the drive (no local→debrid flap).
         val reason = entry.lastError ?: "download is at $onDisk"
-        Log.i(TAG, "range ${parsed.start}- of $cacheKey not on disk ($reason) — starting on debrid")
+        Log.i(TAG, "hybrid $cacheKey start debrid: ${parsed.start}- ($reason)")
         PlaybackStatus.markStreaming(cacheKey, reason)
         return serveHybrid(entry, parsed.start, end, totalBytes, hasRange, type, startOnDisk = false)
     }
@@ -332,9 +318,9 @@ object VideoHandler {
     }
 
     /**
-     * Two-way hybrid: prefer the growing local file when it is safely ahead of the playhead,
-     * otherwise read from the debrid URL. If local falls behind again after a handover,
-     * reopen debrid from the current byte offset (one-way handover used to stall here).
+     * Cold-start helper: read from debrid until the growing file is safely ahead, then stick
+     * to local. Never reopen debrid when the cushion dips — that second connection starves
+     * the download and makes the player buffer in a loop.
      */
     private class HybridInputStream(
         private val entry: CacheEntry,
@@ -358,21 +344,22 @@ object VideoHandler {
 
         override fun read(buffer: ByteArray, offset: Int, count: Int): Int {
             if (closed || remaining <= 0) return -1
-            maybeSwitch()
+            maybeHandoverToLocal()
 
             val want = minOf(count.toLong(), remaining).toInt()
             if (want <= 0) return -1
 
             if (onDisk) {
-                val n = readLocal(buffer, offset, want)
+                val n = readLocalWaiting(buffer, offset, want)
                 if (n > 0) {
                     position += n
                     remaining -= n
                     return n
                 }
-                // Local miss — fall back to debrid for this range.
+                // Download dead or seek far past the write head — last resort.
+                if (!shouldReopenDebrid()) return -1
                 Log.i(TAG, "hybrid fallback to debrid at $position for ${entry.cacheKey}")
-                PlaybackStatus.markStreaming(entry.cacheKey, "local fell behind at $position")
+                PlaybackStatus.markStreaming(entry.cacheKey, "local unavailable at $position")
                 onDisk = false
                 closeLocal()
                 openUpstream()
@@ -389,25 +376,26 @@ object VideoHandler {
             return n
         }
 
-        private fun maybeSwitch() {
+        /** Debrid → local only. Local → debrid is handled as a rare fallback in [read]. */
+        private fun maybeHandoverToLocal() {
+            if (onDisk) return
             val now = System.currentTimeMillis()
             if (now < nextCheckAt) return
             nextCheckAt = now + HANDOVER_CHECK_MS
             val ahead = localAhead()
-            if (onDisk) {
-                if (ahead < FALLBACK_MARGIN_BYTES && entry.status != "complete") {
-                    Log.i(TAG, "hybrid cushion low at $position for ${entry.cacheKey} (ahead=$ahead)")
-                    PlaybackStatus.markStreaming(entry.cacheKey, "local cushion low at $position")
-                    onDisk = false
-                    closeLocal()
-                    openUpstream()
-                }
-            } else if (ahead >= HANDOVER_MARGIN_BYTES || entry.status == "complete") {
+            if (ahead >= HANDOVER_MARGIN_BYTES || entry.status == "complete") {
                 Log.i(TAG, "hybrid handover to USB at $position for ${entry.cacheKey} (ahead=$ahead)")
                 PlaybackStatus.markLocal(entry.cacheKey, "serving bytes ${position + ahead} on disk")
                 closeUpstream()
                 onDisk = true
             }
+        }
+
+        private fun shouldReopenDebrid(): Boolean {
+            if (entry.status in TERMINAL_STATUSES) return isHttpUrl(entry.url)
+            val ahead = localAhead()
+            // Playhead is well past what the downloader can reach soon (e.g. big seek).
+            return ahead < -GROWING_GAP_BYTES && isHttpUrl(entry.url)
         }
 
         private fun localAhead(): Long {
@@ -423,19 +411,47 @@ object VideoHandler {
             return if (part.exists()) part else null
         }
 
-        private fun readLocal(buffer: ByteArray, offset: Int, count: Int): Int {
-            val file = currentLocalFile() ?: return -1
-            if (file.length() <= position) return -1
-            val raf = openLocal(file) ?: return -1
-            val want = minOf(count.toLong(), file.length() - position).toInt()
-            if (want <= 0) return -1
-            return try {
-                raf.seek(position)
-                raf.read(buffer, offset, want)
-            } catch (e: Exception) {
-                Log.w(TAG, "hybrid local read failed: ${e.message}")
-                -1
+        /** Block until the growing file has bytes, same idea as [GrowingFileInputStream]. */
+        private fun readLocalWaiting(buffer: ByteArray, offset: Int, count: Int): Int {
+            var idleSince = System.currentTimeMillis()
+            var lastSize = -1L
+
+            while (!closed) {
+                val file = currentLocalFile()
+                val size = file?.length() ?: 0L
+
+                if (file != null && position < size) {
+                    val raf = openLocal(file) ?: return -1
+                    val want = minOf(count.toLong(), size - position).toInt()
+                    if (want <= 0) return -1
+                    return try {
+                        raf.seek(position)
+                        raf.read(buffer, offset, want)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "hybrid local read failed: ${e.message}")
+                        -1
+                    }
+                }
+
+                if (size != lastSize) {
+                    lastSize = size
+                    idleSince = System.currentTimeMillis()
+                }
+
+                if (entry.status == "complete" && position >= size) return -1
+                if (entry.status in TERMINAL_STATUSES) return -1
+                if (System.currentTimeMillis() - idleSince > STALL_TIMEOUT_MS) {
+                    Log.w(TAG, "hybrid local stall at $position of ${entry.cacheKey}")
+                    return -1
+                }
+
+                try {
+                    Thread.sleep(POLL_MS)
+                } catch (_: InterruptedException) {
+                    return -1
+                }
             }
+            return -1
         }
 
         private fun openLocal(file: File): RandomAccessFile? {

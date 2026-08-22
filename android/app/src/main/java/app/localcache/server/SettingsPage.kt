@@ -55,8 +55,12 @@ object SettingsPage {
             "resumeDownloads" -> {
                 messages += DownloadEngine.resumeSelected(context, all("resumeKey"))
             }
+            "deleteDownloads" -> {
+                messages += DownloadEngine.deleteSelected(context, all("resumeKey"))
+            }
             "cancelDownloads" -> {
-                messages += DownloadEngine.cancelSelected(context, all("resumeKey"))
+                // Older form label — same as delete.
+                messages += DownloadEngine.deleteSelected(context, all("resumeKey"))
             }
             else -> {
                 val selected = AddonConfig.ALL_DEBRID_SERVICES.filter { name ->
@@ -77,6 +81,7 @@ object SettingsPage {
                     streamQuality = first("streamQuality").ifBlank { AddonConfig.QUALITY_1080P },
                     cacheMaxGb = first("cacheMaxGb").toIntOrNull() ?: Prefs.DEFAULT_CACHE_MAX_GB,
                     resultMode = first("resultMode").ifBlank { AddonConfig.RESULT_FASTEST },
+                    autoNextEpisode = params.containsKey("autoNextEpisode"),
                 )
                 if (BuildConfig.WUPLAY_MODE) {
                     Prefs.setPublicHost(context, first("publicHost").ifBlank { null })
@@ -133,19 +138,27 @@ object SettingsPage {
             }
         }
 
-        val resumable = DownloadEngine.listResumable(context)
-        val resumeRows = if (resumable.isEmpty()) {
-            """<p class="hint">No incomplete downloads. When you start another stream, the previous one pauses here.</p>"""
+        val cached = DownloadEngine.listCached(context)
+        val resumeRows = if (cached.isEmpty()) {
+            """<p class="hint">No cached videos yet. Play something in ${escape(AppVariant.clientName)} to start a download.</p>"""
         } else {
-            resumable.joinToString("\n") { item ->
+            val items = cached.joinToString("\n") { item ->
                 """
                 <label class="row">
-                  <input type="checkbox" name="resumeKey" value="${escape(item.cacheKey)}">
+                  <input type="checkbox" name="resumeKey" value="${escape(item.cacheKey)}" class="cache-item">
                   ${escape(item.title)}<br/>
                   <span class="hint">${item.progress}% · ${item.doneGb} / ${item.totalGb} GB · ${escape(item.status)}</span>
                 </label>
                 """.trimIndent()
             }
+            """
+            <label class="row">
+              <input type="checkbox" id="cacheSelectAll" onchange="toggleCacheSelectAll(this.checked)">
+              <b>Select all</b> (${cached.size})
+            </label>
+            <hr style="border:none;border-top:1px solid #ddd;margin:8px 0"/>
+            $items
+            """.trimIndent()
         }
 
         val checks = AddonConfig.ALL_DEBRID_SERVICES.joinToString("\n") { name ->
@@ -157,6 +170,7 @@ object SettingsPage {
         val mFastest = if (snapshot.isFastestResults()) "checked" else ""
         val mFast = if (!snapshot.isCompleteResults() && !snapshot.isFastestResults()) "checked" else ""
         val mComplete = if (snapshot.isCompleteResults()) "checked" else ""
+        val autoNextChecked = if (snapshot.autoNextEpisode) "checked" else ""
         val banner = when {
             saved -> """<div class="ok">${escape(status.orEmpty()).replace("\n", "<br/>")}</div>"""
             else -> ""
@@ -309,6 +323,13 @@ object SettingsPage {
     </div>
     <p class="hint">Fastest prefers a debrid-cached hit quickly. If none is found in time, it falls back to Fast automatically.</p>
 
+    <label>Series downloads</label>
+    <div class="box">
+      <label class="row"><input type="checkbox" name="autoNextEpisode" value="1" $autoNextChecked>
+        Auto-download next episode when the current one finishes</label>
+    </div>
+    <p class="hint">Off by default. When on, finishing an episode <b>you started</b> queues only the <b>next one</b> — not the whole season. Prefetched episodes do not keep chaining.</p>
+
     <label>Cache max (GB)</label>
     <input type="number" name="cacheMaxGb" min="1" max="4096" value="${snapshot.cacheMaxGb}"/>
 
@@ -332,16 +353,16 @@ object SettingsPage {
       <h2>Storage</h2>
       <p class="hint">Now: <b>${escape(currentLabel)}</b><br/>$quotaLine<br/><code>${escape(currentPath)}</code></p>
 
-      <label>Resume / cancel incomplete downloads</label>
+      <label>Cached videos</label>
       <div class="box">
         $resumeRows
       </div>
       <button type="submit" class="action" name="action" value="resumeDownloads">Resume selected</button>
-      <button type="submit" class="action danger" name="action" value="cancelDownloads"
-        onclick="return confirm('Cancel selected downloads and delete their partial files?');">
-        Cancel selected
+      <button type="submit" class="action danger" name="action" value="deleteDownloads"
+        onclick="return confirm('Delete selected videos from storage (complete and incomplete)? This cannot be undone.');">
+        Delete selected
       </button>
-      <p class="hint">Starting a new stream pauses the previous download. Resume finishes it in the background (one at a time). Cancel deletes the .part file.</p>
+      <p class="hint">Lists finished and partial files. Resume only affects incomplete ones. Delete removes the file from USB/device whether or not it finished. Starting a new stream pauses the previous download.</p>
 
       <label>USB drives on this TV</label>
       <div class="box">
@@ -398,6 +419,11 @@ object SettingsPage {
         '<button type="button" class="icon" onclick="this.parentElement.remove()" title="Remove">−</button>';
       list.appendChild(row);
       row.querySelector('input').focus();
+    }
+    function toggleCacheSelectAll(checked) {
+      document.querySelectorAll('input.cache-item[name="resumeKey"]').forEach(function(cb) {
+        cb.checked = checked;
+      });
     }
     function esc(t) {
       return String(t == null ? '' : t)

@@ -1,6 +1,5 @@
 package app.localcache.torrent
 
-import android.content.Context
 import android.util.Log
 import app.localcache.storage.CacheEntry
 import org.libtorrent4j.Priority
@@ -90,7 +89,10 @@ object TorrentEngine {
             return try {
                 val manager = session ?: SessionManager().also { session = it }
                 if (!manager.isRunning) {
-                    manager.start(SessionParams(defaultSettings()))
+                    // mmap I/O breaks on exFAT USB sticks; posix writes are slower and reliable.
+                    val params = SessionParams(defaultSettings())
+                    params.setPosixDiskIO()
+                    manager.start(params)
                     manager.startDht()
                     Log.i(TAG, "libtorrent session started")
                 }
@@ -113,7 +115,9 @@ object TorrentEngine {
         activeLimit(8)
         uploadRateLimit(UPLOAD_LIMIT_BYTES_PER_SEC)
         downloadRateLimit(0)
-        listenInterfaces("0.0.0.0:6881,[::]:6881")
+        // Random port, IPv4 only. Pinning 6881 plus IPv6 made the whole listen
+        // setup fail on boxes where v6 is disabled or 6881 is already taken.
+        listenInterfaces("0.0.0.0:0")
         setEnableDht(true)
         setEnableLsd(true)
         setDhtBootstrapNodes(
@@ -195,21 +199,21 @@ object TorrentEngine {
             report(entry, "finding peers for the torrent…")
             Log.i(TAG, "adding $infoHash for ${entry.cacheKey} -> ${saveDir.absolutePath}")
 
-            // DEFAULT_DONT_DOWNLOAD: a magnet's file list is unknown until metadata lands, and
-            // without this libtorrent would immediately start allocating every file in the
-            // torrent across the cache folder before we can say we only want one of them.
-            manager.download(
-                magnet,
-                saveDir,
-                TorrentFlags.SEQUENTIAL_DOWNLOAD.or_(TorrentFlags.DEFAULT_DONT_DOWNLOAD),
-            )
+            // Proven locally: DEFAULT_DONT_DOWNLOAD combined with renameFile leaves the
+            // torrent wanting data but never connecting. Sequential + an immediate resume
+            // is the path that actually fetched pieces. Extra files are ignored after
+            // metadata, once we know which one we want.
+            manager.download(magnet, saveDir, TorrentFlags.SEQUENTIAL_DOWNLOAD)
 
             val added = awaitHandle(manager, sha1)
                 ?: return Result(false, "Torrent could not be added to the session")
             handle = added
 
-            // Auto-manage would pause and resume the torrent behind our back.
+            // parse_magnet_uri starts torrents paused+auto_managed. If we drop auto-manage
+            // and do not resume, metadata never arrives and progress sits at 0% forever.
             runCatching { added.unsetFlags(TorrentFlags.AUTO_MANAGED) }
+            runCatching { added.unsetFlags(TorrentFlags.PAUSED.or_(TorrentFlags.UPLOAD_MODE)) }
+            runCatching { added.resume() }
 
             val torrentInfo = awaitMetadata(added, entry, cancelled)
             if (cancelled()) return Result(false, null)
@@ -235,15 +239,22 @@ object TorrentEngine {
 
             val resuming = partFile.exists() && partFile.length() > 0
 
-            // Rename before any file is wanted, so not one byte can land on the wrong path.
-            if (!placeFileAt(added, fileIndex, partFile)) {
-                return Result(false, "Could not place the torrent file in the cache folder")
-            }
+            // Pause so we can pick the one file and rename it before more of the torrent
+            // lands under the release's original folder name.
+            runCatching { added.pause() }
 
             val priorities = Priority.array(Priority.IGNORE, torrentInfo.numFiles())
             priorities[fileIndex] = Priority.TOP_PRIORITY
             runCatching { added.prioritizeFiles(priorities) }
                 .onFailure { return Result(false, "Could not select the file: ${it.message}") }
+            if (added.filePriority(fileIndex) == Priority.IGNORE) {
+                runCatching { added.filePriority(fileIndex, Priority.TOP_PRIORITY) }
+            }
+
+            // torrentFile().filePath() does not update after renameFile. The write still
+            // goes to the new name — waiting for the path to change aborted working downloads.
+            runCatching { added.renameFile(fileIndex, partFile.name) }
+                .onFailure { Log.w(TAG, "renameFile failed: ${it.message}") }
 
             if (resuming) {
                 Log.i(TAG, "rechecking existing ${partFile.name} (${partFile.length()} bytes)")
@@ -251,12 +262,11 @@ object TorrentEngine {
                 runCatching { added.forceRecheck() }
             }
 
-            // Belt and braces: nothing above should have left it paused or upload-only, but a
-            // torrent stuck in either state is invisible except as a download that never moves.
             runCatching { added.unsetFlags(TorrentFlags.PAUSED.or_(TorrentFlags.UPLOAD_MODE)) }
             runCatching { added.resume() }
 
             val pieceLength = torrentInfo.pieceLength().toLong()
+            if (pieceLength <= 0) return Result(false, "Torrent piece size was 0")
             val fileOffset = files.fileOffset(fileIndex)
             val firstPiece = (fileOffset / pieceLength).toInt()
             val lastPiece = ((fileOffset + fileSize - 1) / pieceLength).toInt()
@@ -278,7 +288,11 @@ object TorrentEngine {
             runCatching { manager.remove(added) }
             handle = null
 
-            if (!renameWhenReleased(partFile, finalFile)) {
+            val written = findWrittenFile(saveDir, partFile, torrentInfo, fileIndex)
+            if (written == null) {
+                return Result(false, "Torrent finished but the video file was not on disk")
+            }
+            if (!renameWhenReleased(written, finalFile)) {
                 return Result(false, "Could not rename the finished torrent file")
             }
 
@@ -527,40 +541,32 @@ object TorrentEngine {
     }
 
     /**
-     * Renames the wanted file inside the torrent so libtorrent writes straight to our `.part`
-     * path. Without this the file lands under the torrent's own folder and playback, the quota
-     * scanner and the resume list all look in the wrong place.
+     * libtorrent may write to our `.part` name, or to the torrent's original file name if
+     * the rename did not stick. Playback and the quota scanner only know about [partFile],
+     * so we have to find whichever path actually received the bytes.
      */
-    private fun placeFileAt(handle: TorrentHandle, fileIndex: Int, partFile: File): Boolean {
-        val wanted = partFile.name
-        if (pathInTorrent(handle, fileIndex) == wanted) return true
-
-        runCatching { handle.renameFile(fileIndex, wanted) }
-            .onFailure { Log.w(TAG, "renameFile failed: ${it.message}") }
-
-        var seen: String? = null
-        val deadline = System.currentTimeMillis() + 20_000
-        while (System.currentTimeMillis() < deadline) {
-            seen = pathInTorrent(handle, fileIndex)
-            if (seen == wanted) return true
-            try {
-                Thread.sleep(200)
-            } catch (_: InterruptedException) {
-                return false
-            }
-        }
-        Log.e(TAG, "torrent file stayed at '$seen' instead of '$wanted'")
-        return false
+    private fun findWrittenFile(
+        saveDir: File,
+        partFile: File,
+        info: TorrentInfo,
+        fileIndex: Int,
+    ): File? {
+        val original = info.files().filePath(fileIndex)
+        val candidates = listOf(
+            partFile,
+            File(saveDir, partFile.name),
+            File(saveDir, File(original).name),
+            File(saveDir, original),
+        ).distinct()
+        return candidates.firstOrNull { it.exists() && it.isFile && it.length() > 0 }
     }
 
-    private fun pathInTorrent(handle: TorrentHandle, fileIndex: Int): String? =
-        runCatching { handle.torrentFile()?.files()?.filePath(fileIndex) }.getOrNull()
-
     /** The session releases the file asynchronously, so the rename gets a few attempts. */
-    private fun renameWhenReleased(partFile: File, finalFile: File): Boolean {
-        if (!partFile.exists()) return finalFile.exists()
+    private fun renameWhenReleased(from: File, finalFile: File): Boolean {
+        if (from.absolutePath == finalFile.absolutePath) return from.exists()
+        if (!from.exists()) return finalFile.exists()
         repeat(20) {
-            if (partFile.renameTo(finalFile)) return true
+            if (from.renameTo(finalFile)) return true
             try {
                 Thread.sleep(250)
             } catch (_: InterruptedException) {

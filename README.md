@@ -12,7 +12,7 @@ You pick a stream like usual (Torrentio / Comet). **You can start watching while
 **No more buffering mid-movie.**  
 Once the file is local, your TV isn’t fighting your internet anymore. Smooth playback. That’s the whole point.
 
-**Latest APK:** [v0.5.1](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.5.1)
+**Latest APK:** [v0.5.2](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.5.2)
 
 ---
 

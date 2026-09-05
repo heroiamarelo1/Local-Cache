@@ -49,6 +49,10 @@ android {
             // Dev TV with little free space — skip the 2 GB gate.
             buildConfigField("boolean", "ALLOW_TINY_INTERNAL", "true")
             buildConfigField("long", "INTERNAL_MIN_FREE_BYTES", "0L")
+            // Waydroid / emulators are x86_64. TV releases stay arm-only via defaultConfig.
+            ndk {
+                abiFilters += "x86_64"
+            }
         }
         create("wuplay") {
             dimension = "audience"
@@ -107,4 +111,5 @@ dependencies {
     implementation("org.libtorrent4j:libtorrent4j:$libtorrent4jVersion")
     implementation("org.libtorrent4j:libtorrent4j-android-arm64:$libtorrent4jVersion")
     implementation("org.libtorrent4j:libtorrent4j-android-arm:$libtorrent4jVersion")
+    implementation("org.libtorrent4j:libtorrent4j-android-x86_64:$libtorrent4jVersion")
 }

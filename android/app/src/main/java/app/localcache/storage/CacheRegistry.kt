@@ -18,6 +18,8 @@ data class CacheEntry(
      * engine knows how much is really there.
      */
     var downloadedBytes: Long = 0,
+    /** Pieces hashed so far. For torrents this is often ahead of [downloadedBytes]. */
+    var verifiedBytes: Long = 0,
     var totalBytes: Long = 0,
     var filePath: String? = null,
     var lastError: String? = null,

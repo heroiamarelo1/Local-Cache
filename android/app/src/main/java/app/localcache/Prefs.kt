@@ -127,6 +127,17 @@ object Prefs {
         prefs(context).edit().putBoolean("allow_torrents", enabled).apply()
     }
 
+    /**
+     * Keep a copy-paste log of torrent/download events on `/logs`. Off by default —
+     * it is verbose and meant for diagnosing a stuck download.
+     */
+    fun debugLog(context: Context): Boolean =
+        prefs(context).getBoolean("debug_log", false)
+
+    fun setDebugLog(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean("debug_log", enabled).apply()
+    }
+
     fun debridServices(context: Context): List<String> {
         val raw = prefs(context).getString("debrid_services", null) ?: return emptyList()
         return raw.split(',').map { it.trim() }.filter { it.isNotBlank() }

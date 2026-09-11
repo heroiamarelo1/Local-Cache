@@ -5,28 +5,20 @@
 **Watch now. Save it locally. Watch without buffering.**
 
 Local Cache is a tiny Android TV app that runs a Stremio add-on *on your TV*.  
-You pick a stream like usual (Torrentio / Comet). **You can start watching while it downloads** — no waiting for the whole file. While you chill, it copies the movie to a USB stick (recommended) or internal storage and plays from it.
+You pick a stream like usual (Torrentio / Comet) — a **debrid** link, or optionally a **torrent**. **You can start watching while it downloads** — no waiting for the whole file. While you chill, it copies the movie to a USB stick (recommended) or internal storage and plays from it.
 
 ### ✨ The big win
 
 **No more buffering mid-movie.**  
 Once the file is local, your TV isn’t fighting your internet anymore. Smooth playback. That’s the whole point.
 
-**Latest APK:** [v0.5.2](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.5.2)
+**Latest APK:** [v0.5.8](https://github.com/heroiamarelo1/Local-Cache/releases/tag/v0.5.8)
 
 ---
 
-## Debrid is strongly recommended ⚡
+## Torrents 🧲 (optional, off by default)
 
-**Use a debrid service** (AllDebrid, TorBox, Real-Debrid, etc.). Debrid links are fast, private, and always available — a torrent is none of those things.
-
-1. Configure Torrentio / Comet **with your debrid account** (get the final `manifest.json` URL)
-2. Paste that URL in Local Cache `/settings`
-3. Check the same debrid service(s) in the settings checkboxes
-
-### Torrents 🧲 (optional, off by default)
-
-Since v0.5.0 Local Cache can also download **magnet** streams peer-to-peer, so it still works when you have no debrid account. Turn it on under **Torrents** in `/settings`.
+v0.5.8 can download **magnet** streams peer-to-peer, so it still works when you have no debrid account. Turn it on under **Torrents** in `/settings`. You can start watching while it downloads; if the file is not ready yet, Stremio shows a short holding clip — go back and play again when the opening is on disk. Auto-download next episode works for magnets too.
 
 Debrid rows always come first — torrents only appear where nothing cached fits. Two things to know before enabling it:
 
@@ -34,6 +26,16 @@ Debrid rows always come first — torrents only appear where nothing cached fits
 - It is **slower**, and a torrent with no seeders simply never starts.
 
 Uploading is capped at 1 MB/s and stops the moment a file finishes.
+
+---
+
+## Debrid is still recommended ⚡
+
+**A debrid service** (AllDebrid, TorBox, Real-Debrid, etc.) is faster, private, and available even when a swarm is dead.
+
+1. Configure Torrentio / Comet **with your debrid account** (get the final `manifest.json` URL)
+2. Paste that URL in Local Cache `/settings`
+3. Check the same debrid service(s) in the settings checkboxes
 
 ---
 
@@ -63,9 +65,9 @@ Uploading is capped at 1 MB/s and stops the moment a file finishes.
 
 1. 📦 **Sideload the app** on your Android TV / Google TV ([Releases](https://github.com/heroiamarelo1/Local-Cache/releases))
 2. ▶️ **Start the server** in Local Cache — pick USB, or use internal storage if you must
-3. 📱 **Configure on your phone** — same Wi‑Fi, open `TV_IP:7100/settings` (it’s written in the app), paste Torrentio / Comet manifests that include your debrid, then check those debrid services
+3. 📱 **Configure on your phone** — same Wi‑Fi, open `TV_IP:7100/settings` (it’s written in the app), paste Torrentio / Comet manifests, check your debrid services, and turn on **Torrents** if you want magnet streams
 4. 🎬 **Add the add-on in Stremio** → `http://127.0.0.1:7100/manifest.json`
-5. 🍿 **Pick a stream** — watch while it saves locally
+5. 🍿 **Pick a stream** — watch while it saves locally (debrid or torrent)
 
 ---
 

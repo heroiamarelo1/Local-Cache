@@ -92,6 +92,7 @@ class LocalHttpServer(
                     .put("stremioInstall", Prefs.stremioInstallUrl(appContext))
                     .put("wuplayInstall", Prefs.wuplayInstallUrl(appContext))
                     .put("settings", "http://$host:$listeningPort/settings")
+                    .put("logs", "http://$host:$listeningPort/logs")
                     .put("upstreamsConfigured", cfg.hasAnyUpstream())
                     .put("streamQuality", cfg.streamQuality)
                     .put("resultMode", cfg.resultMode)
@@ -114,6 +115,14 @@ class LocalHttpServer(
 
             uri == "/settings" || uri == "/settings/" -> {
                 return SettingsPage.serve(appContext, session)
+            }
+
+            uri == "/logs" || uri == "/logs/" -> {
+                return LogsPage.serve(appContext, session, plain = false)
+            }
+
+            uri == "/logs.txt" -> {
+                return LogsPage.serve(appContext, session, plain = true)
             }
 
             uri == "/status" -> {

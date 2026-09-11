@@ -2,6 +2,8 @@ package app.localcache.server
 
 import android.content.Context
 import android.util.Log
+import app.localcache.DiagLog
+import app.localcache.R
 import app.localcache.storage.CacheEntry
 import app.localcache.storage.CacheRegistry
 import app.localcache.storage.DownloadEngine
@@ -12,6 +14,7 @@ import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Response
 import fi.iki.elonen.NanoHTTPD.Response.Status
 import java.io.File
+import java.io.FileInputStream
 import java.io.InputStream
 import java.io.RandomAccessFile
 
@@ -55,6 +58,13 @@ object VideoHandler {
     /** Torrents go quiet for longer than a debrid link ever should before they are dead. */
     private const val TORRENT_STALL_TIMEOUT_MS = 240_000L
 
+    /**
+     * Stremio asks for `bytes=0-(filesize-1)` in one shot. Promising that whole body makes
+     * the player walk the stream to the MKV cue index at the end — which only arrives when
+     * the torrent is finished. Cap the first response so it has to Range-request the tail.
+     */
+    private const val TORRENT_RANGE_WINDOW = 8L * 1024 * 1024
+
     private fun isHttpUrl(url: String): Boolean =
         url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)
 
@@ -71,6 +81,22 @@ object VideoHandler {
         CacheRegistry.markAccessed(cacheKey)
         DownloadEngine.ensureStarted(context, cacheKey)
         CacheRegistry.refreshFromDisk(cacheKey)
+
+        // A torrent is not a playable MKV yet. Send the holding clip immediately so Stremio
+        // does not sit on a spinner until it gives up. Replay after the opening + cues land.
+        if (entry.isTorrent && !torrentReadyToPlay(entry)) {
+            if (entry.status in TERMINAL_STATUSES) {
+                val why = entry.lastError ?: entry.status
+                Log.w(TAG, "torrent $cacheKey not playable ($why)")
+                return json(Status.INTERNAL_ERROR, """{"error":"Torrent did not start","message":"$why"}""")
+            }
+            DiagLog.t(
+                "holding $cacheKey status=${entry.status} contig=${entry.downloadedBytes} " +
+                    "ready=${TorrentEngine.isReadyForPlayer(cacheKey)}",
+            )
+            PlaybackStatus.markLocal(cacheKey, "opening torrent · holding clip")
+            return serveHolding(context, session, headOnly)
+        }
 
         val totalBytes = ensureTotalBytes(entry)
         val type = contentType(entry.filePath ?: ".mp4")
@@ -105,7 +131,12 @@ object VideoHandler {
         val onDisk = available?.size ?: 0L
         val haveStart = available != null && (available.complete || available.size > parsed.start)
 
-        val end = requestEnd(parsed, totalBytes, onDisk)
+        val torrentDone = available?.complete == true || entry.status == "complete"
+        val end = if (entry.isTorrent) {
+            torrentServeEnd(parsed, totalBytes, onDisk, torrentDone)
+        } else {
+            requestEnd(parsed, totalBytes, onDisk)
+        }
         if (end < parsed.start) {
             return json(Status.RANGE_NOT_SATISFIABLE, """{"error":"Bad range"}""")
         }
@@ -116,8 +147,13 @@ object VideoHandler {
         if (entry.isTorrent) {
             TorrentEngine.requestOffset(cacheKey, parsed.start)
             Log.i(TAG, "serving torrent $cacheKey: ${parsed.start}-$end (readable $onDisk)")
+            DiagLog.t(
+                "play $cacheKey range=${parsed.start}-$end total=$totalBytes " +
+                    "readable=$onDisk contig=${entry.downloadedBytes} status=${entry.status}",
+            )
             PlaybackStatus.markLocal(cacheKey, "torrent · $onDisk bytes ready")
-            return serveProgressive(entry, parsed.start, end, totalBytes, hasRange, type)
+            // Always 206 + Content-Range so a capped window does not look like an 8 MB file.
+            return serveProgressive(entry, parsed.start, end, totalBytes, hasRange = totalBytes > 0, type)
         }
 
         // Playhead is already on (or about to hit) the growing file: serve from storage and
@@ -137,12 +173,74 @@ object VideoHandler {
         return serveHybrid(entry, parsed.start, end, totalBytes, hasRange, type, startOnDisk = false)
     }
 
+    private fun torrentReadyToPlay(entry: CacheEntry): Boolean {
+        if (entry.status == "complete") return true
+        val path = entry.filePath
+        if (path != null && File(path).exists()) return true
+        return TorrentEngine.isReadyForPlayer(entry.cacheKey)
+    }
+
+    /** The cat card, packed as a short H.264 clip so Stremio will actually play it. */
+    private fun holdingVideo(context: Context): File {
+        val dest = File(context.cacheDir, "torrent_holding.mp4")
+        if (!dest.exists() || dest.length() < 1024) {
+            context.resources.openRawResource(R.raw.torrent_holding).use { input ->
+                dest.outputStream().use { input.copyTo(it) }
+            }
+        }
+        return dest
+    }
+
+    private fun serveHolding(context: Context, session: IHTTPSession, headOnly: Boolean): Response {
+        val file = holdingVideo(context)
+        val total = file.length()
+        val type = "video/mp4"
+        if (headOnly) return headResponse(type, total)
+
+        val rangeHeader = session.headers["range"] ?: session.headers["Range"]
+        val parsed = parseRangeHeader(rangeHeader)
+        val hasRange = rangeHeader != null
+        val end = requestEnd(parsed, total, total)
+        if (end < parsed.start || parsed.start >= total) {
+            return json(Status.RANGE_NOT_SATISFIABLE, """{"error":"Bad range"}""")
+        }
+
+        val length = end - parsed.start + 1
+        val body = FileInputStream(file).also { it.skip(parsed.start) }
+        val status = if (hasRange) Status.PARTIAL_CONTENT else Status.OK
+        val response = NanoHTTPD.newFixedLengthResponse(status, type, body, length)
+        response.addHeader("Accept-Ranges", "bytes")
+        response.addHeader("Access-Control-Allow-Origin", "*")
+        if (hasRange) {
+            response.addHeader("Content-Range", "bytes ${parsed.start}-$end/$total")
+        }
+        return response
+    }
+
     /** Inclusive end byte we promise to deliver for this request. */
     private fun requestEnd(parsed: ParsedRange, totalBytes: Long, onDisk: Long): Long {
         parsed.end?.let { if (it >= 0) return it }
         if (totalBytes > 0) return totalBytes - 1
         if (onDisk > 0) return onDisk - 1
         return parsed.start
+    }
+
+    /**
+     * Honour small range probes (MKV cues, seeks) in full. Split "give me the whole file"
+     * into a short window the player can finish, then Range-request the rest.
+     */
+    private fun torrentServeEnd(
+        parsed: ParsedRange,
+        totalBytes: Long,
+        onDisk: Long,
+        complete: Boolean,
+    ): Long {
+        val requested = requestEnd(parsed, totalBytes, onDisk)
+        if (complete) return requested
+        val span = requested - parsed.start + 1
+        if (span <= TORRENT_RANGE_WINDOW) return requested
+        val capped = parsed.start + TORRENT_RANGE_WINDOW - 1
+        return if (totalBytes > 0) minOf(requested, capped, totalBytes - 1) else minOf(requested, capped)
     }
 
     private data class Available(val file: File, val size: Long, val complete: Boolean)
@@ -329,9 +427,6 @@ object VideoHandler {
                     Log.w(TAG, "stalled at $position of ${entry.cacheKey}")
                     return false
                 }
-
-                // Keep nudging: the piece the player is blocked on is the one worth rushing.
-                if (entry.isTorrent) TorrentEngine.requestOffset(entry.cacheKey, position)
 
                 try {
                     Thread.sleep(POLL_MS)

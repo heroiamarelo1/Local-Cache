@@ -2,6 +2,7 @@ package app.localcache.server
 
 import android.content.Context
 import android.util.Log
+import app.localcache.DiagLog
 import app.localcache.Prefs
 import java.io.IOException
 
@@ -26,6 +27,7 @@ object ServerManager {
         Thread.sleep(STOP_WAIT_MS)
 
         val lanHost = Prefs.lanHost(context)
+        DiagLog.attach(context)
         val portsToTry = buildList {
             add(Prefs.serverPort(context))
             addAll(PortFinder.candidates)

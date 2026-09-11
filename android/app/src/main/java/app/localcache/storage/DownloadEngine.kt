@@ -3,6 +3,7 @@ package app.localcache.storage
 import android.content.Context
 import android.util.Log
 import app.localcache.Prefs
+import app.localcache.DiagLog
 import app.localcache.server.UpstreamProxy
 import app.localcache.torrent.TorrentEngine
 import kotlinx.coroutines.CoroutineScope
@@ -100,6 +101,7 @@ object DownloadEngine {
             entry.status = "error"
             entry.lastError = "Torrents are turned off in /settings"
             Log.w(TAG, "refusing magnet ${entry.cacheKey} — torrents disabled")
+            DiagLog.w("refusing magnet ${entry.cacheKey} — torrents disabled")
             return
         }
 
@@ -118,6 +120,10 @@ object DownloadEngine {
             entry.lastError = null
             entry.bytesPerSec = 0
             Log.i(TAG, "start $cacheKey -> ${target.final.absolutePath}")
+            DiagLog.i(
+                "download start $cacheKey torrent=${entry.isTorrent} " +
+                    "part=${target.part.absolutePath} status=${entry.status}",
+            )
 
             activeJob = CoroutineScope(Dispatchers.IO).launch {
                 try {
@@ -598,6 +604,7 @@ object DownloadEngine {
         entry.status = "error"
         entry.lastError = result.error ?: entry.lastError ?: "Torrent download failed"
         Log.e(TAG, "torrent failed ${entry.cacheKey}: ${entry.lastError}")
+        DiagLog.e("torrent failed ${entry.cacheKey}: ${entry.lastError}")
     }
 
     private class OutOfSpace(message: String) : IllegalStateException(message)
@@ -632,10 +639,15 @@ object DownloadEngine {
             else -> entry.status
         }
         val swarm = if (entry.isTorrent) TorrentEngine.statusDetail()?.let { " · $it" }.orEmpty() else ""
-        val stats = if (total > 0) {
-            "$progress% · ${gb(done)} / ${gb(total)} GB$speed · $state$swarm"
-        } else {
-            "${gb(done)} GB$speed · $state$swarm"
+        val stats = when {
+            entry.isTorrent && total > 0 -> {
+                val readyMb = done / (1024 * 1024)
+                val inMb = maxOf(entry.verifiedBytes, done) / (1024 * 1024)
+                val totalMb = total / (1024 * 1024)
+                "$progress% playable · ${readyMb} MB ready · ${inMb} / ${totalMb} MB in$speed · $state$swarm"
+            }
+            total > 0 -> "$progress% · ${gb(done)} / ${gb(total)} GB$speed · $state$swarm"
+            else -> "${gb(done)} GB$speed · $state$swarm"
         }
         return StatusParts(shortName, stats)
     }

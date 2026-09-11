@@ -3,6 +3,7 @@ package app.localcache.server
 import android.content.Context
 import app.localcache.AppVariant
 import app.localcache.BuildConfig
+import app.localcache.DiagLog
 import app.localcache.Prefs
 import app.localcache.config.AddonConfig
 import app.localcache.storage.DiskQuota
@@ -85,6 +86,7 @@ object SettingsPage {
                     autoNextEpisode = params.containsKey("autoNextEpisode"),
                     allowTorrents = params.containsKey("allowTorrents"),
                 )
+                DiagLog.setEnabled(context, params.containsKey("debugLog"))
                 if (BuildConfig.WUPLAY_MODE) {
                     Prefs.setPublicHost(context, first("publicHost").ifBlank { null })
                 }
@@ -174,6 +176,7 @@ object SettingsPage {
         val mComplete = if (snapshot.isCompleteResults()) "checked" else ""
         val autoNextChecked = if (snapshot.autoNextEpisode) "checked" else ""
         val torrentsChecked = if (snapshot.allowTorrents) "checked" else ""
+        val debugChecked = if (Prefs.debugLog(context)) "checked" else ""
         val torrentHint = TorrentEngine.nativeError()
             ?.let { "<br/><b>Torrent engine failed to load on this device:</b> ${escape(it)}" }
             .orEmpty()
@@ -342,6 +345,14 @@ object SettingsPage {
         Show magnet streams and download them peer-to-peer</label>
     </div>
     <p class="hint">Off by default. Debrid links stay first — torrents only fill in when nothing cached is available. While a torrent runs, your IP address is visible to everyone in the swarm, and it will be slower than a debrid link. Uploading is capped at 1 MB/s and stops the moment the file finishes.$torrentHint</p>
+
+    <label>Diagnostics</label>
+    <div class="box">
+      <label class="row"><input type="checkbox" name="debugLog" value="1" $debugChecked>
+        Record a detailed download log</label>
+    </div>
+    <p class="hint">Off by default. Use this if a download fails or never starts. Save, reproduce the problem, then open
+      <a href="/logs">the log page</a> and copy the text. Leave it off day to day — writing every event to the USB stick slows torrents down.</p>
 
     <label>Cache max (GB)</label>
     <input type="number" name="cacheMaxGb" min="1" max="4096" value="${snapshot.cacheMaxGb}"/>

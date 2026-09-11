@@ -7,6 +7,7 @@ import app.localcache.config.AddonConfig
 import app.localcache.model.StreamPick
 import app.localcache.stream.TvStreamOrder
 import app.localcache.stream.UpstreamFetcher
+import app.localcache.torrent.MagnetLinks
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -165,17 +166,29 @@ object AutoNextEpisode {
             completeResults = false,
             maxFitBytes = maxFit,
         )
-        val pick = built.picks.firstOrNull { usablePick(it) } ?: return null
+        val pick = built.picks.firstOrNull { usablePick(context, it) }
+        if (pick == null) {
+            Log.i(TAG, "auto-next: no usable stream for $nextId (picks=${built.picks.size})")
+            return null
+        }
 
         CacheRegistry.register(pick.stream, "series", nextId)
         CacheRegistry.attachCachePath(context, pick.stream.cacheKey)
-        Log.i(TAG, "auto-next queued ${pick.stream.cacheKey} (${pick.slot})")
+        Log.i(
+            TAG,
+            "auto-next queued ${pick.stream.cacheKey} (${pick.slot}" +
+                "${if (pick.stream.isTorrent) ", torrent" else ""})",
+        )
         return pick.stream.cacheKey
     }
 
-    private fun usablePick(pick: StreamPick): Boolean {
+    private fun usablePick(context: Context, pick: StreamPick): Boolean {
         if (pick.slot == "fits_none") return false
         val url = pick.stream.url
+        if (url.isBlank()) return false
+        if (pick.stream.isTorrent || MagnetLinks.isMagnet(url)) {
+            return Prefs.allowTorrents(context)
+        }
         return url.startsWith("http://", ignoreCase = true) ||
             url.startsWith("https://", ignoreCase = true)
     }

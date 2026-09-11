@@ -3,7 +3,6 @@ package app.localcache.server
 import android.content.Context
 import android.util.Log
 import app.localcache.DiagLog
-import app.localcache.R
 import app.localcache.storage.CacheEntry
 import app.localcache.storage.CacheRegistry
 import app.localcache.storage.DownloadEngine
@@ -14,7 +13,6 @@ import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Response
 import fi.iki.elonen.NanoHTTPD.Response.Status
 import java.io.File
-import java.io.FileInputStream
 import java.io.InputStream
 import java.io.RandomAccessFile
 
@@ -82,24 +80,27 @@ object VideoHandler {
         DownloadEngine.ensureStarted(context, cacheKey)
         CacheRegistry.refreshFromDisk(cacheKey)
 
-        // A torrent is not a playable MKV yet. Send the holding clip immediately so Stremio
-        // does not sit on a spinner until it gives up. Replay after the opening + cues land.
-        if (entry.isTorrent && !torrentReadyToPlay(entry)) {
+        // Wait for the real file opening. A placeholder video ends too soon and can
+        // kick auto-next, which stops this torrent to start the next episode.
+        if (entry.isTorrent) {
             if (entry.status in TERMINAL_STATUSES) {
                 val why = entry.lastError ?: entry.status
                 Log.w(TAG, "torrent $cacheKey not playable ($why)")
                 return json(Status.INTERNAL_ERROR, """{"error":"Torrent did not start","message":"$why"}""")
             }
-            DiagLog.t(
-                "holding $cacheKey status=${entry.status} contig=${entry.downloadedBytes} " +
-                    "ready=${TorrentEngine.isReadyForPlayer(cacheKey)}",
-            )
-            PlaybackStatus.markLocal(cacheKey, "opening torrent · holding clip")
-            return serveHolding(context, session, headOnly)
+            PlaybackStatus.markLocal(cacheKey, "opening torrent")
+            awaitTorrentOpening(entry)
+            if (entry.status in TERMINAL_STATUSES) {
+                val why = entry.lastError ?: entry.status
+                Log.w(TAG, "torrent $cacheKey died while opening ($why)")
+                return json(Status.INTERNAL_ERROR, """{"error":"Torrent did not start","message":"$why"}""")
+            }
         }
 
         val totalBytes = ensureTotalBytes(entry)
-        val type = contentType(entry.filePath ?: ".mp4")
+        val type = contentType(
+            if (entry.isTorrent) entry.label.ifBlank { ".mkv" } else entry.filePath ?: ".mp4",
+        )
 
         if (headOnly) {
             return headResponse(type, totalBytes)
@@ -173,48 +174,21 @@ object VideoHandler {
         return serveHybrid(entry, parsed.start, end, totalBytes, hasRange, type, startOnDisk = false)
     }
 
-    private fun torrentReadyToPlay(entry: CacheEntry): Boolean {
-        if (entry.status == "complete") return true
-        val path = entry.filePath
-        if (path != null && File(path).exists()) return true
-        return TorrentEngine.isReadyForPlayer(entry.cacheKey)
-    }
-
-    /** The cat card, packed as a short H.264 clip so Stremio will actually play it. */
-    private fun holdingVideo(context: Context): File {
-        val dest = File(context.cacheDir, "torrent_holding.mp4")
-        if (!dest.exists() || dest.length() < 1024) {
-            context.resources.openRawResource(R.raw.torrent_holding).use { input ->
-                dest.outputStream().use { input.copyTo(it) }
+    /**
+     * Wait until the first piece of the real file is on disk so the player compiles an
+     * actual MKV/MP4 header, not an empty sparse file.
+     */
+    private fun awaitTorrentOpening(entry: CacheEntry) {
+        val deadline = System.currentTimeMillis() + TORRENT_METADATA_WAIT_MS
+        while (System.currentTimeMillis() < deadline) {
+            if (entry.status in TERMINAL_STATUSES || entry.status == "complete") return
+            if (TorrentEngine.hasOpeningPiece(entry.cacheKey)) return
+            try {
+                Thread.sleep(POLL_MS)
+            } catch (_: InterruptedException) {
+                return
             }
         }
-        return dest
-    }
-
-    private fun serveHolding(context: Context, session: IHTTPSession, headOnly: Boolean): Response {
-        val file = holdingVideo(context)
-        val total = file.length()
-        val type = "video/mp4"
-        if (headOnly) return headResponse(type, total)
-
-        val rangeHeader = session.headers["range"] ?: session.headers["Range"]
-        val parsed = parseRangeHeader(rangeHeader)
-        val hasRange = rangeHeader != null
-        val end = requestEnd(parsed, total, total)
-        if (end < parsed.start || parsed.start >= total) {
-            return json(Status.RANGE_NOT_SATISFIABLE, """{"error":"Bad range"}""")
-        }
-
-        val length = end - parsed.start + 1
-        val body = FileInputStream(file).also { it.skip(parsed.start) }
-        val status = if (hasRange) Status.PARTIAL_CONTENT else Status.OK
-        val response = NanoHTTPD.newFixedLengthResponse(status, type, body, length)
-        response.addHeader("Accept-Ranges", "bytes")
-        response.addHeader("Access-Control-Allow-Origin", "*")
-        if (hasRange) {
-            response.addHeader("Content-Range", "bytes ${parsed.start}-$end/$total")
-        }
-        return response
     }
 
     /** Inclusive end byte we promise to deliver for this request. */

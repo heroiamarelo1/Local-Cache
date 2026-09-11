@@ -616,10 +616,16 @@ object TorrentEngine {
         current.playhead = offset
     }
 
-    /**
-     * True when the opening piece and the MKV cue piece are both on disk, so a replay
-     * can start the real file instead of the holding clip.
-     */
+    /** True when the first piece of the video file is on disk — enough for a real container header. */
+    fun hasOpeningPiece(cacheKey: String): Boolean {
+        val current = active ?: return false
+        if (current.cacheKey != cacheKey) return false
+        val have = current.haveBits ?: return false
+        val first = current.firstPiece
+        return first >= 0 && first < have.size && have[first]
+    }
+
+    /** True when the opening piece and the MKV cue piece are both on disk. */
     fun isReadyForPlayer(cacheKey: String): Boolean {
         val current = active ?: return false
         if (current.cacheKey != cacheKey) return false

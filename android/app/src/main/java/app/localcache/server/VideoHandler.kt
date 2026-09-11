@@ -80,27 +80,21 @@ object VideoHandler {
         DownloadEngine.ensureStarted(context, cacheKey)
         CacheRegistry.refreshFromDisk(cacheKey)
 
-        // Wait for the real file opening. A placeholder video ends too soon and can
-        // kick auto-next, which stops this torrent to start the next episode.
         if (entry.isTorrent) {
-            if (entry.status in TERMINAL_STATUSES) {
-                val why = entry.lastError ?: entry.status
-                Log.w(TAG, "torrent $cacheKey not playable ($why)")
-                return json(Status.INTERNAL_ERROR, """{"error":"Torrent did not start","message":"$why"}""")
-            }
             PlaybackStatus.markLocal(cacheKey, "opening torrent")
-            awaitTorrentOpening(entry)
-            if (entry.status in TERMINAL_STATUSES) {
-                val why = entry.lastError ?: entry.status
-                Log.w(TAG, "torrent $cacheKey died while opening ($why)")
-                return json(Status.INTERNAL_ERROR, """{"error":"Torrent did not start","message":"$why"}""")
-            }
+        }
+        if (entry.isTorrent && entry.status in TERMINAL_STATUSES) {
+            val why = entry.lastError ?: entry.status
+            Log.w(TAG, "torrent $cacheKey not playable ($why)")
+            return json(Status.INTERNAL_ERROR, """{"error":"Torrent did not start","message":"$why"}""")
         }
 
-        val totalBytes = ensureTotalBytes(entry)
+        // Answer immediately. Waiting for swarm metadata looks like silence, and the player
+        // then tries another stream — which pauses this torrent and starts a new download.
         val type = contentType(
             if (entry.isTorrent) entry.label.ifBlank { ".mkv" } else entry.filePath ?: ".mp4",
         )
+        val totalBytes = if (entry.isTorrent) entry.totalBytes else ensureTotalBytes(entry)
 
         if (headOnly) {
             return headResponse(type, totalBytes)
@@ -120,12 +114,6 @@ object VideoHandler {
             Log.w(TAG, "no cache target for $cacheKey (${entry.lastError}) — streaming direct")
             PlaybackStatus.markStreaming(cacheKey, entry.lastError ?: "no cache folder")
             return proxyToClient(entry.url, parsed.start, requestEnd(parsed, totalBytes, 0), totalBytes, hasRange, type)
-        }
-
-        if (entry.isTorrent && totalBytes <= 0) {
-            val why = entry.lastError ?: "the swarm never sent the torrent details"
-            Log.w(TAG, "torrent $cacheKey has no size yet ($why)")
-            return json(Status.INTERNAL_ERROR, """{"error":"Torrent did not start","message":"$why"}""")
         }
 
         val available = availableNow(entry)
@@ -154,7 +142,7 @@ object VideoHandler {
             )
             PlaybackStatus.markLocal(cacheKey, "torrent · $onDisk bytes ready")
             // Always 206 + Content-Range so a capped window does not look like an 8 MB file.
-            return serveProgressive(entry, parsed.start, end, totalBytes, hasRange = totalBytes > 0, type)
+            return serveProgressive(entry, parsed.start, end, totalBytes, hasRange = true, type)
         }
 
         // Playhead is already on (or about to hit) the growing file: serve from storage and
@@ -172,23 +160,6 @@ object VideoHandler {
         Log.i(TAG, "hybrid $cacheKey start debrid: ${parsed.start}- ($reason)")
         PlaybackStatus.markStreaming(cacheKey, reason)
         return serveHybrid(entry, parsed.start, end, totalBytes, hasRange, type, startOnDisk = false)
-    }
-
-    /**
-     * Wait until the first piece of the real file is on disk so the player compiles an
-     * actual MKV/MP4 header, not an empty sparse file.
-     */
-    private fun awaitTorrentOpening(entry: CacheEntry) {
-        val deadline = System.currentTimeMillis() + TORRENT_METADATA_WAIT_MS
-        while (System.currentTimeMillis() < deadline) {
-            if (entry.status in TERMINAL_STATUSES || entry.status == "complete") return
-            if (TorrentEngine.hasOpeningPiece(entry.cacheKey)) return
-            try {
-                Thread.sleep(POLL_MS)
-            } catch (_: InterruptedException) {
-                return
-            }
-        }
     }
 
     /** Inclusive end byte we promise to deliver for this request. */
@@ -209,8 +180,12 @@ object VideoHandler {
         onDisk: Long,
         complete: Boolean,
     ): Long {
-        val requested = requestEnd(parsed, totalBytes, onDisk)
-        if (complete) return requested
+        if (complete && totalBytes > 0) return requestEnd(parsed, totalBytes, onDisk)
+        val requested = if (totalBytes > 0) {
+            requestEnd(parsed, totalBytes, onDisk)
+        } else {
+            parsed.end?.takeIf { it >= parsed.start } ?: (parsed.start + TORRENT_RANGE_WINDOW - 1)
+        }
         val span = requested - parsed.start + 1
         if (span <= TORRENT_RANGE_WINDOW) return requested
         val capped = parsed.start + TORRENT_RANGE_WINDOW - 1

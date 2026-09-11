@@ -23,6 +23,8 @@ object TvStreamOrder {
         completeResults: Boolean = false,
         /** When > 0, insert a fits-device pick after on-drive (internal storage mode). */
         maxFitBytes: Long = 0L,
+        /** Torrents already on disk or downloading — keep these at the top so they are easy to find. */
+        pinFirst: List<StreamItem> = emptyList(),
     ): StreamBuildResult {
         val rawCount = allStreams.size
         val playable = allStreams.filter { !DebridRules.isExcluded(it) }
@@ -46,6 +48,7 @@ object TvStreamOrder {
             picks.add(StreamPick(stream, slot))
         }
 
+        pinFirst.forEach { add(it, "pinned") }
         onDrive.forEach { add(it.stream, it.slot) }
 
         if (playable.isEmpty()) {

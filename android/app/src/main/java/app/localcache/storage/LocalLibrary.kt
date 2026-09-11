@@ -125,4 +125,15 @@ object LocalLibrary {
         isTorrent = item.isTorrent,
         fileIndex = item.fileIndex,
     )
+
+    fun toStreamItem(entry: CacheEntry): StreamItem = StreamItem(
+        cacheKey = entry.cacheKey,
+        source = entry.source ?: "torrent",
+        label = entry.label,
+        rawName = entry.label,
+        url = entry.url,
+        title = entry.label,
+        isTorrent = entry.isTorrent,
+        fileIndex = entry.fileIndex,
+    )
 }

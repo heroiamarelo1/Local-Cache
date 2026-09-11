@@ -5,6 +5,7 @@ import android.util.Log
 import app.localcache.BuildConfig
 import app.localcache.Prefs
 import app.localcache.config.AddonConfig
+import app.localcache.model.StreamItem
 import app.localcache.model.StreamPick
 import app.localcache.storage.CacheRegistry
 import app.localcache.storage.DiskQuota
@@ -239,6 +240,7 @@ class LocalHttpServer(
                     enabledDebrid = cfg.debridServices,
                     completeResults = cfg.isCompleteResults(),
                     maxFitBytes = maxFitBytes,
+                    pinFirst = pinnedTorrents(type, id, all),
                 )
                 Log.i(
                     TAG,
@@ -331,6 +333,46 @@ class LocalHttpServer(
         addHeader("Access-Control-Allow-Methods", "GET, POST, HEAD, OPTIONS")
         addHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Range")
         addHeader("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges")
+    }
+
+    /** Torrents already cached or downloading for this title, so they sit at the top of the list. */
+    private fun pinnedTorrents(type: String, id: String, all: List<StreamItem>): List<StreamItem> {
+        val byKey = LinkedHashMap<String, StreamItem>()
+        fun put(item: StreamItem) {
+            if (item.isTorrent && item.cacheKey.isNotBlank()) byKey.putIfAbsent(item.cacheKey, item)
+        }
+        all.filter { torrentInUse(it.cacheKey) }.forEach(::put)
+        CacheRegistry.all()
+            .filter { it.isTorrent && it.type == type && it.id == id && torrentInUse(it.cacheKey) }
+            .forEach { put(LocalLibrary.toStreamItem(it)) }
+        LocalLibrary.forTitle(appContext, type, id)
+            .filter { it.isTorrent }
+            .forEach { put(LocalLibrary.toStreamItem(it)) }
+        return byKey.values.sortedWith(
+            compareBy<StreamItem> { torrentPinRank(it.cacheKey) }
+                .thenByDescending { CacheRegistry.progress(it.cacheKey) },
+        )
+    }
+
+    private fun torrentInUse(cacheKey: String): Boolean {
+        val entry = CacheRegistry.get(cacheKey) ?: return false
+        if (!entry.isTorrent) return false
+        val status = entry.status
+        return status == "complete" ||
+            status == "downloading" ||
+            status == "paused" ||
+            entry.downloadedBytes > 0 ||
+            CacheRegistry.progress(cacheKey) > 0 ||
+            cacheKey == DownloadEngine.activeKey()
+    }
+
+    private fun torrentPinRank(cacheKey: String): Int {
+        val entry = CacheRegistry.get(cacheKey)
+        return when {
+            entry?.status == "complete" || CacheRegistry.progress(cacheKey) >= 100 -> 0
+            entry?.status == "downloading" || cacheKey == DownloadEngine.activeKey() -> 1
+            else -> 2
+        }
     }
 
     private fun jsonResponse(status: Response.Status, body: String): Response {
